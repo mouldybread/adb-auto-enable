@@ -4,6 +4,8 @@
 
 Perfect for Chromecast with Google TV, Android TV boxes, and any Android device where you want persistent wireless ADB access without manual intervention.
 
+**I am not a programmer. This was coded using AI. It works for me and I'm sharing it in the hopes it may be of use, or inspire someone else. Please do not expect much in the way of maintenance or support, I made this purely for my own use.**
+
 ## ✨ Features
 
 - 🚀 **Fully Autonomous**: Automatically enables wireless debugging and switches to port 5555 on every boot
@@ -200,31 +202,10 @@ Send tcpip:5555 command
 Success! (with 3 retry attempts if needed)
 ```
 
-### Why This Approach?
-
-**Alternatives:**
-- ❌ **Magisk modules**: Require root
-- ❌ **Tasker + AutoInput**: Require UI automation, fragile
-- ❌ **Shell scripts**: Require root or ADB always enabled
-- ✅ **This app**: Direct ADB protocol, no root, fully autonomous
-
-## 🤝 Contributing
-
-Contributions welcome! Areas for improvement:
-
-- [ ] Add support for custom port (not just 5555)
-- [ ] Implement persistent notification with quick actions
-- [ ] Add option to disable auto-boot behavior
-- [ ] Support for multiple saved device pairings
-- [ ] Improve mDNS discovery reliability
-- [ ] Add widget for quick status check
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
 ## 🙏 Acknowledgments
 
+- Google, for forcing my hardware to update consequently creating this mess.
+- [This](https://github.com/home-assistant/core/issues/148359) Home Assistant Issue
 - Built for Chromecast with Google TV users who need persistent ADB access
 - Inspired by various Tasker projects and Magisk modules
 - Uses [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd) for embedded web server
