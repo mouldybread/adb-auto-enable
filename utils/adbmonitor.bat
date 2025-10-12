@@ -1,10 +1,23 @@
 @echo off
 setlocal enabledelayedexpansion
 
+REM Check if target argument is provided
+if "%~1"=="" (
+    echo ERROR: No target specified
+    echo.
+    echo Usage: %~nx0 [IP:PORT]
+    echo Example: %~nx0 192.168.1.1:5555
+    echo.
+    pause
+    exit /b 1
+)
+
+set TARGET=%~1
+
 echo ========================================
 echo ADB Connection Monitor
 echo ========================================
-echo Target: 192.168.3.79:5555
+echo Target: %TARGET%
 echo Duration: 5 minutes (300 seconds)
 echo ========================================
 echo.
@@ -19,7 +32,7 @@ set /a elapsed+=5
 
 echo [%date% %time%] Attempt %attempt% (Elapsed: %elapsed%s / %maxtime%s)
 
-adb connect 192.168.3.79:5555 > temp_output.txt 2>&1
+adb connect %TARGET% > temp_output.txt 2>&1
 
 findstr /C:"connected to" temp_output.txt > nul
 if %errorlevel% equ 0 (
