@@ -6,6 +6,10 @@ Perfect for Chromecast with Google TV, Android TV boxes, and any Android device 
 
 **I am not a programmer. This was coded using AI. It works for me and I'm sharing it in the hopes it may be of use, or inspire someone else. Please do not expect much in the way of maintenance or support, I made this purely for my own use.**
 
+<p align="center">
+  <img src="gui.png" alt="Auto ADB Web Interface" style="width:75%; height:auto;">
+</p>
+
 ## ✨ Features
 
 - 🚀 **Fully Autonomous**: Automatically enables wireless debugging and switches to port 5555 on every boot
