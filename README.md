@@ -5,10 +5,16 @@
 Perfect for Chromecast with Google TV, Android TV boxes, and any Android device where you want persistent wireless ADB access without manual intervention.
 
 **I am not a programmer. This was coded using AI. It works for me and I'm sharing it in the hopes it may be of use, or inspire someone else. Please do not expect much in the way of maintenance or support, I made this purely for my own use.**
+> [!WARNING]
+> **SECURITY WARNING:** This application enables Android Debug Bridge (ADB) on port 5555, which provides remote access to your device with full system privileges. While ADB connections require RSA key authentication (users must accept the connection on first pairing), **once a computer is authorized, it has permanent unrestricted access** to install applications, access all data, execute shell commands, and take complete control of your device without further prompts. Additionally, the RSA authentication prompt is vulnerable to overlay attacks where malicious apps can trick users into authorizing connections. **This app should ONLY be used on isolated or trusted networks** (such as a home network behind a firewall with no port forwarding) and **NEVER on public WiFi, guest networks, or any network you do not fully control**. Exposing ADB to the internet or untrusted networks can result in complete device compromise if an attacker gains authorization, either through social engineering, overlay attacks, or physical access to previously paired computers. Use this tool only on devices you own and ensure your network is properly secured with a firewall blocking external access to port 5555.
 
 <p align="center">
   <img src="gui.png" alt="Auto ADB Web Interface" style="width:75%; height:auto;">
 </p>
+
+## 🚫 Limitations
+
+  - Tested only on CCwGTV. May not work at all on wired devices.
 
 ## ✨ Features
 
@@ -210,7 +216,6 @@ Success! (with 3 retry attempts if needed)
 
 - Google, for forcing my hardware to update consequently creating this mess.
 - [This](https://github.com/home-assistant/core/issues/148359) Home Assistant Issue
-- Built for Chromecast with Google TV users who need persistent ADB access
 - Inspired by various Tasker projects and Magisk modules
 - Uses [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd) for embedded web server
 
