@@ -1,4 +1,4 @@
-# 🔧 auto-adb
+# 🔧 adb-auto-enable
 
 **Automatically enable wireless ADB debugging and switch to port 5555 on every boot - completely autonomous, no root required!**
 

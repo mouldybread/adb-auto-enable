@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.adbautoenable"
+    namespace = "com.tpn.adbautoenable"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.adbautoenable"
+        applicationId = "com.tpn.adbautoenable"
         minSdk = 21
         targetSdk = 34
         versionCode = 2
