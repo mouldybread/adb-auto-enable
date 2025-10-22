@@ -20,6 +20,7 @@ import android.os.IBinder;
 import android.provider.Settings;
 import android.util.Log;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -33,9 +34,13 @@ public class AdbConfigService extends Service {
     private static final String PREFS_NAME = "ADBAutoEnablePrefs";
     private static final String KEY_LAST_STATUS = "last_status";
     private static final String KEY_LAST_PORT = "last_port";
-    private static final int INITIAL_BOOT_DELAY_SECONDS = 60; // Increased from 30 to 60
+    private static final int INITIAL_BOOT_DELAY_SECONDS = 60;
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final int RETRY_DELAY_SECONDS = 15;
+    private static final int WEB_SERVER_PORT = 8080;
+
+    private WebServer webServer;
+    private boolean isBootConfigMode = false;
 
     @Override
     public void onCreate() {
@@ -44,6 +49,9 @@ public class AdbConfigService extends Service {
         try {
             createNotificationChannel();
             Log.i(TAG, "Notification channel created");
+
+            // Start web server in the service
+            startWebServer();
         } catch (Exception e) {
             Log.e(TAG, "Error in onCreate", e);
         }
@@ -53,43 +61,42 @@ public class AdbConfigService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.i(TAG, "AdbConfigService onStartCommand() called");
 
+        // Check if this is boot configuration or just keeping the service alive
+        isBootConfigMode = intent != null && intent.getBooleanExtra("boot_config", false);
+
         try {
             // Start as foreground service IMMEDIATELY
-            Notification notification = createNotification("Starting ADB configuration...");
+            Notification notification = createNotification(
+                    isBootConfigMode ? "Starting ADB configuration..." : "Web server running on port " + WEB_SERVER_PORT
+            );
             startForeground(1, notification);
             Log.i(TAG, "Started foreground service with notification");
 
-            // Run configuration in background thread
-            new Thread(() -> {
-                try {
-                    // Step 1: Wait for WiFi to be connected
-                    waitForWifiConnection();
-
-                    // Step 2: Wait for system to stabilize
-                    waitForBootStabilization();
-
-                    // Step 3: Attempt configuration with retries
-                    configureAdbWithRetries();
-
-                } catch (Exception e) {
-                    Log.e(TAG, "Error in configuration thread", e);
-                    updateStatus("Failed - " + e.getMessage());
-                    updateNotification("Failed - error");
-                } finally {
-                    // Keep notification visible for 5 seconds before stopping
+            // Only run boot configuration if this is a boot event
+            if (isBootConfigMode) {
+                // Run configuration in background thread
+                new Thread(() -> {
                     try {
-                        Thread.sleep(5000);
-                    } catch (InterruptedException ignored) {}
-                    stopSelf();
-                }
-            }).start();
-
+                        // Step 1: Wait for WiFi to be connected
+                        waitForWifiConnection();
+                        // Step 2: Wait for system to stabilize
+                        waitForBootStabilization();
+                        // Step 3: Attempt configuration with retries
+                        configureAdbWithRetries();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error in configuration thread", e);
+                        updateStatus("Failed - " + e.getMessage());
+                        updateNotification("Web server running - Boot config failed");
+                    }
+                    // Don't stop service after boot config - keep web server running
+                    updateNotification("Web server running on port " + WEB_SERVER_PORT);
+                }).start();
+            }
         } catch (Exception e) {
             Log.e(TAG, "Error in onStartCommand", e);
-            stopSelf();
         }
 
-        return START_NOT_STICKY;
+        return START_STICKY; // Changed from START_NOT_STICKY to keep service alive
     }
 
     @Override
@@ -97,11 +104,32 @@ public class AdbConfigService extends Service {
         return null;
     }
 
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        Log.i(TAG, "AdbConfigService onDestroy() called");
+
+        // Stop web server when service is destroyed
+        if (webServer != null) {
+            webServer.stop();
+            Log.i(TAG, "Web server stopped");
+        }
+    }
+
+    private void startWebServer() {
+        try {
+            webServer = new WebServer(this, WEB_SERVER_PORT);
+            webServer.start();
+            Log.i(TAG, "Web server started on port " + WEB_SERVER_PORT);
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to start web server", e);
+        }
+    }
+
     private void waitForWifiConnection() throws InterruptedException {
         Log.i(TAG, "Waiting for WiFi connection...");
         updateNotification("Waiting for WiFi...");
-
-        int maxWaitSeconds = 120; // Wait up to 2 minutes for WiFi
+        int maxWaitSeconds = 120;
         int waitedSeconds = 0;
 
         while (waitedSeconds < maxWaitSeconds) {
@@ -112,16 +140,13 @@ public class AdbConfigService extends Service {
                     return;
                 }
             }
-
             Thread.sleep(1000);
             waitedSeconds++;
-
             if (waitedSeconds % 10 == 0) {
                 Log.i(TAG, "Still waiting for WiFi... (" + waitedSeconds + "s)");
                 updateNotification("Waiting for WiFi... (" + waitedSeconds + "s)");
             }
         }
-
         Log.w(TAG, "WiFi wait timeout - proceeding anyway");
     }
 
@@ -132,24 +157,20 @@ public class AdbConfigService extends Service {
                 return false;
             }
 
-            // Check if WiFi is enabled
             if (!wifiManager.isWifiEnabled()) {
                 return false;
             }
 
-            // Check connection state
             WifiInfo wifiInfo = wifiManager.getConnectionInfo();
             if (wifiInfo == null) {
                 return false;
             }
 
-            // Check if we have a valid IP address
             int ipAddress = wifiInfo.getIpAddress();
             if (ipAddress == 0) {
                 return false;
             }
 
-            // Double-check with ConnectivityManager
             ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm != null) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -166,7 +187,6 @@ public class AdbConfigService extends Service {
                             networkInfo.getType() == ConnectivityManager.TYPE_WIFI;
                 }
             }
-
             return false;
         } catch (Exception e) {
             Log.e(TAG, "Error checking WiFi status", e);
@@ -176,16 +196,13 @@ public class AdbConfigService extends Service {
 
     private void waitForBootStabilization() throws InterruptedException {
         Log.i(TAG, "Waiting " + INITIAL_BOOT_DELAY_SECONDS + " seconds for system to stabilize...");
-
         for (int i = INITIAL_BOOT_DELAY_SECONDS; i > 0; i--) {
             updateNotification("System stabilizing... " + i + "s");
             Thread.sleep(1000);
-
             if (i % 10 == 0) {
                 Log.i(TAG, "Boot stabilization: " + i + " seconds remaining");
             }
         }
-
         Log.i(TAG, "Boot stabilization complete");
     }
 
@@ -195,7 +212,6 @@ public class AdbConfigService extends Service {
             updateNotification("Attempt " + attempt + " of " + MAX_RETRY_ATTEMPTS);
 
             boolean success = configureAdb();
-
             if (success) {
                 Log.i(TAG, "Configuration successful on attempt " + attempt);
                 return;
@@ -232,7 +248,7 @@ public class AdbConfigService extends Service {
 
             Log.i(TAG, "Step 2: Waiting for ADB service to start...");
             updateNotification("Waiting for ADB service...");
-            Thread.sleep(10000); // Increased from 8 to 10 seconds
+            Thread.sleep(10000);
 
             String deviceIP = getDeviceIP();
             Log.i(TAG, "Device IP: " + deviceIP);
@@ -248,7 +264,6 @@ public class AdbConfigService extends Service {
             updateStatus("Discovering ADB port...");
 
             int port = discoverAdbPortViaMdns();
-
             if (port == -1) {
                 Log.i(TAG, "mDNS failed, falling back to port scan...");
                 updateNotification("mDNS failed, scanning ports...");
@@ -306,8 +321,8 @@ public class AdbConfigService extends Service {
     private int discoverAdbPortViaMdns() {
         final int[] discoveredPort = {-1};
         final CountDownLatch latch = new CountDownLatch(1);
-
         String deviceIP = getDeviceIP();
+
         Log.i(TAG, "Looking for mDNS service on device IP: " + deviceIP);
 
         NsdManager nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
@@ -327,7 +342,6 @@ public class AdbConfigService extends Service {
             @Override
             public void onServiceFound(NsdServiceInfo serviceInfo) {
                 Log.i(TAG, "Service found: " + serviceInfo.getServiceName());
-
                 nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
                     @Override
                     public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode) {
@@ -337,7 +351,6 @@ public class AdbConfigService extends Service {
                     @Override
                     public void onServiceResolved(NsdServiceInfo serviceInfo) {
                         Log.i(TAG, "Service resolved: " + serviceInfo.getServiceName());
-
                         if (serviceInfo.getHost() != null) {
                             InetAddress hostAddress = serviceInfo.getHost();
                             String host = hostAddress.getHostAddress();
@@ -351,7 +364,6 @@ public class AdbConfigService extends Service {
 
                             if (host.startsWith("127.") || host.equals("::1") ||
                                     host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) {
-
                                 if (host.equals(deviceIP)) {
                                     Log.i(TAG, "Found matching device with IP: " + deviceIP);
                                     discoveredPort[0] = port;
@@ -398,9 +410,7 @@ public class AdbConfigService extends Service {
 
         try {
             nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
-
-            boolean found = latch.await(15, TimeUnit.SECONDS); // Increased from 10 to 15 seconds
-
+            boolean found = latch.await(15, TimeUnit.SECONDS);
             if (!found) {
                 Log.e(TAG, "mDNS discovery timed out after 15 seconds");
                 try {
@@ -409,7 +419,6 @@ public class AdbConfigService extends Service {
                     Log.e(TAG, "Error stopping discovery after timeout", e);
                 }
             }
-
         } catch (Exception e) {
             Log.e(TAG, "mDNS discovery error", e);
         }
@@ -419,11 +428,10 @@ public class AdbConfigService extends Service {
 
     private int scanForAdbPort() {
         Log.i(TAG, "Starting optimized port scan...");
-
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         int lastPort = prefs.getInt(KEY_LAST_PORT, -1);
-
         String deviceIP = getDeviceIP();
+
         Log.i(TAG, "Scanning with device IP: " + deviceIP);
 
         AdbHelper adbHelper = new AdbHelper(this);
@@ -434,10 +442,10 @@ public class AdbConfigService extends Service {
         }
 
         int[] commonBases = {37000, 38000, 39000, 40000, 41000, 42000, 35000, 36000, 43000, 44000};
-
         for (int base : commonBases) {
             Log.i(TAG, "Checking range " + base + "-" + (base + 999) + "...");
             updateNotification("Scanning ports " + base + "...");
+
             for (int offset = 0; offset < 1000; offset += 5) {
                 int port = base + offset;
                 if (adbHelper.connect(deviceIP, port)) {
@@ -446,7 +454,6 @@ public class AdbConfigService extends Service {
                 }
             }
         }
-
         return -1;
     }
 
@@ -454,24 +461,19 @@ public class AdbConfigService extends Service {
         try {
             WifiManager wifiManager = (WifiManager)
                     getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-
             if (wifiManager == null) {
                 return "127.0.0.1";
             }
 
             int ipAddress = wifiManager.getConnectionInfo().getIpAddress();
-
-            // Convert int to byte array in little-endian order
             byte[] ipBytes = ByteBuffer.allocate(4)
                     .order(ByteOrder.LITTLE_ENDIAN)
                     .putInt(ipAddress)
                     .array();
 
-            // Convert byte array to IP address string
             InetAddress inetAddress = InetAddress.getByAddress(ipBytes);
             String result = inetAddress.getHostAddress();
             return (result != null) ? result : "127.0.0.1";
-
         } catch (Exception e) {
             Log.e(TAG, "Failed to get device IP", e);
             return "127.0.0.1";
@@ -496,7 +498,6 @@ public class AdbConfigService extends Service {
                     NotificationManager.IMPORTANCE_LOW
             );
             channel.setDescription("ADB auto-configuration service");
-
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
                 manager.createNotificationChannel(channel);

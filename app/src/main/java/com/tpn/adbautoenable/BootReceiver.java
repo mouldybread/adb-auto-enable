@@ -17,10 +17,10 @@ public class BootReceiver extends BroadcastReceiver {
         // Respond to LOCKED_BOOT_COMPLETED for early start
         if (Intent.ACTION_BOOT_COMPLETED.equals(action) ||
                 Intent.ACTION_LOCKED_BOOT_COMPLETED.equals(action)) {
-
             Log.i(TAG, "Boot event detected, starting ADB configuration service...");
 
             Intent serviceIntent = new Intent(context, AdbConfigService.class);
+            serviceIntent.putExtra("boot_config", true); // Flag for boot configuration
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(serviceIntent);
