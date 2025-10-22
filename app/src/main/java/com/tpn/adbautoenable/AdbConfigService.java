@@ -41,6 +41,7 @@ public class AdbConfigService extends Service {
 
     private WebServer webServer;
     private boolean isBootConfigMode = false;
+    private volatile boolean isConfiguring = false;
 
     @Override
     public void onCreate() {
@@ -74,6 +75,14 @@ public class AdbConfigService extends Service {
 
             // Only run boot configuration if this is a boot event
             if (isBootConfigMode) {
+                // Prevent duplicate configuration threads
+                if (isConfiguring) {
+                    Log.w(TAG, "Configuration already in progress, ignoring duplicate request");
+                    return START_STICKY;
+                }
+
+                isConfiguring = true;
+
                 // Run configuration in background thread
                 new Thread(() -> {
                     try {
@@ -87,6 +96,8 @@ public class AdbConfigService extends Service {
                         Log.e(TAG, "Error in configuration thread", e);
                         updateStatus("Failed - " + e.getMessage());
                         updateNotification("Web server running - Boot config failed");
+                    } finally {
+                        isConfiguring = false;
                     }
                     // Don't stop service after boot config - keep web server running
                     updateNotification("Web server running on port " + WEB_SERVER_PORT);
@@ -214,7 +225,7 @@ public class AdbConfigService extends Service {
             boolean success = configureAdb();
             if (success) {
                 Log.i(TAG, "Configuration successful on attempt " + attempt);
-                return;
+                return; // Exit immediately on success
             }
 
             if (attempt < MAX_RETRY_ATTEMPTS) {
@@ -224,7 +235,7 @@ public class AdbConfigService extends Service {
                     Thread.sleep(RETRY_DELAY_SECONDS * 1000);
                 } catch (InterruptedException e) {
                     Log.e(TAG, "Retry delay interrupted", e);
-                    break;
+                    return; // Exit if interrupted
                 }
             }
         }
