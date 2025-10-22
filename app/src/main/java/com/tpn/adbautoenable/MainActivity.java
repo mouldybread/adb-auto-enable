@@ -13,7 +13,7 @@ import android.util.Log;
 
 public class MainActivity extends Activity {
     private static final String TAG = "ADBAutoEnable";
-    private static final int WEB_PORT = 8080;
+    private static final int WEB_PORT = 9093;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

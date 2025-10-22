@@ -3,8 +3,10 @@ package com.tpn.adbautoenable;
 import android.content.Context;
 import android.os.Build;
 import android.util.Log;
+
 import io.github.muntashirakon.adb.AbsAdbConnectionManager;
 import io.github.muntashirakon.adb.AdbStream;
+
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.cert.X509CertificateHolder;
@@ -13,11 +15,14 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+
 import org.conscrypt.Conscrypt;
+
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigInteger;
 import java.security.KeyFactory;
@@ -36,11 +41,9 @@ import java.util.Date;
 
 public class AdbHelper {
     private static final String TAG = "ADBAutoEnable";
-    private Context context;
-    private SimpleAdbManager adbManager;
+    private final SimpleAdbManager adbManager;
 
     public AdbHelper(Context context) {
-        this.context = context;
         try {
             // Install security providers
             Log.i(TAG, "Installing security providers");
@@ -56,9 +59,10 @@ public class AdbHelper {
             } else {
                 Log.i(TAG, "ADB manager created successfully");
             }
+
         } catch (Exception e) {
             Log.e(TAG, "Failed to initialize ADB helper", e);
-            e.printStackTrace();
+            throw new RuntimeException("Failed to initialize ADB helper", e);
         }
     }
 
@@ -75,7 +79,6 @@ public class AdbHelper {
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Pairing failed", e);
-            e.printStackTrace();
             return false;
         }
     }
@@ -125,9 +128,52 @@ public class AdbHelper {
 
             Log.i(TAG, "Successfully switched to port 5555");
             return true;
+
         } catch (Exception e) {
             Log.e(TAG, "Failed to switch to port 5555", e);
-            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public boolean selfGrantPermission(String host, int port, String packageName, String permission) {
+        if (adbManager == null) {
+            Log.e(TAG, "Cannot self-grant - ADB manager is null");
+            return false;
+        }
+
+        try {
+            Log.i(TAG, "Attempting to grant permission " + permission + " to " + packageName);
+            adbManager.connect(host, port);
+
+            Log.i(TAG, "Sending pm grant shell command");
+            String command = "shell:pm grant " + packageName + " " + permission;
+            AdbStream stream = adbManager.openStream(command);
+
+            // Read response if any using InputStream
+            InputStream inputStream = stream.openInputStream();
+            byte[] buffer = new byte[1024];
+            int bytesRead = inputStream.read(buffer);
+
+            String response = "";
+            if (bytesRead > 0) {
+                response = new String(buffer, 0, bytesRead);
+                Log.i(TAG, "Grant command response: " + response);
+            }
+
+            stream.close();
+            adbManager.close();
+
+            // Check if there was an error in the response
+            if (response.toLowerCase().contains("error") || response.toLowerCase().contains("exception")) {
+                Log.e(TAG, "Permission grant failed: " + response);
+                return false;
+            }
+
+            Log.i(TAG, "Successfully granted permission!");
+            return true;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to grant permission", e);
             return false;
         }
     }
@@ -137,10 +183,9 @@ public class AdbHelper {
         private PrivateKey privateKey;
         private PublicKey publicKey;
         private X509Certificate certificate;
-        private Context context;
-        private File keyFile;
-        private File pubKeyFile;
-        private File certFile;
+        private final File keyFile;
+        private final File pubKeyFile;
+        private final File certFile;
 
         public static synchronized SimpleAdbManager getInstance(Context context) {
             if (INSTANCE == null) {
@@ -150,7 +195,6 @@ public class AdbHelper {
                     Log.i(TAG, "SimpleAdbManager instance created");
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to create SimpleAdbManager", e);
-                    e.printStackTrace();
                     return null;
                 }
             }
@@ -159,7 +203,6 @@ public class AdbHelper {
 
         private SimpleAdbManager(Context context) throws Exception {
             Log.i(TAG, "SimpleAdbManager constructor starting");
-            this.context = context.getApplicationContext();
             setApi(Build.VERSION.SDK_INT);
 
             keyFile = new File(context.getFilesDir(), "adb_key");
@@ -177,35 +220,24 @@ public class AdbHelper {
                 Log.i(TAG, "Loading existing key pair and certificate");
                 try {
                     // Load private key
-                    byte[] privateKeyBytes = new byte[(int) keyFile.length()];
-                    FileInputStream fis = new FileInputStream(keyFile);
-                    fis.read(privateKeyBytes);
-                    fis.close();
-
+                    byte[] privateKeyBytes = readFileBytes(keyFile);
                     PKCS8EncodedKeySpec privateSpec = new PKCS8EncodedKeySpec(privateKeyBytes);
                     KeyFactory keyFactory = KeyFactory.getInstance("RSA");
                     privateKey = keyFactory.generatePrivate(privateSpec);
                     Log.i(TAG, "Private key loaded");
 
                     // Load public key
-                    byte[] publicKeyBytes = new byte[(int) pubKeyFile.length()];
-                    fis = new FileInputStream(pubKeyFile);
-                    fis.read(publicKeyBytes);
-                    fis.close();
-
+                    byte[] publicKeyBytes = readFileBytes(pubKeyFile);
                     X509EncodedKeySpec publicSpec = new X509EncodedKeySpec(publicKeyBytes);
                     publicKey = keyFactory.generatePublic(publicSpec);
                     Log.i(TAG, "Public key loaded");
 
                     // Load certificate
-                    byte[] certBytes = new byte[(int) certFile.length()];
-                    fis = new FileInputStream(certFile);
-                    fis.read(certBytes);
-                    fis.close();
-
+                    byte[] certBytes = readFileBytes(certFile);
                     CertificateFactory cf = CertificateFactory.getInstance("X.509");
                     certificate = (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(certBytes));
                     Log.i(TAG, "Certificate loaded");
+
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to load existing keys, generating new ones", e);
                     generateNewKeyPairAndCert();
@@ -213,6 +245,23 @@ public class AdbHelper {
             } else {
                 Log.i(TAG, "No existing keys found, generating new ones");
                 generateNewKeyPairAndCert();
+            }
+        }
+
+        private byte[] readFileBytes(File file) throws IOException {
+            byte[] bytes = new byte[(int) file.length()];
+            try (FileInputStream fis = new FileInputStream(file)) {
+                int bytesRead = fis.read(bytes);
+                if (bytesRead != bytes.length) {
+                    throw new IOException("Failed to read entire file");
+                }
+            }
+            return bytes;
+        }
+
+        private void writeFileBytes(File file, byte[] bytes) throws IOException {
+            try (FileOutputStream fos = new FileOutputStream(file)) {
+                fos.write(bytes);
             }
         }
 
@@ -232,18 +281,9 @@ public class AdbHelper {
 
             // Save keys
             Log.i(TAG, "Saving keys to files");
-            FileOutputStream fos = new FileOutputStream(keyFile);
-            fos.write(privateKey.getEncoded());
-            fos.close();
-
-            fos = new FileOutputStream(pubKeyFile);
-            fos.write(publicKey.getEncoded());
-            fos.close();
-
-            // Save certificate
-            fos = new FileOutputStream(certFile);
-            fos.write(certificate.getEncoded());
-            fos.close();
+            writeFileBytes(keyFile, privateKey.getEncoded());
+            writeFileBytes(pubKeyFile, publicKey.getEncoded());
+            writeFileBytes(certFile, certificate.getEncoded());
 
             Log.i(TAG, "Keys and certificate saved successfully");
         }
@@ -265,13 +305,11 @@ public class AdbHelper {
                     publicKeyInfo
             );
 
-            // Don't specify provider - let it use default Android provider
             ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
                     .build(keyPair.getPrivate());
 
             X509CertificateHolder certHolder = certBuilder.build(signer);
 
-            // FIXED: Removed .setProvider("BC") to use default Android provider
             return new JcaX509CertificateConverter()
                     .getCertificate(certHolder);
         }

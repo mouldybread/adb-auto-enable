@@ -37,7 +37,7 @@ public class AdbConfigService extends Service {
     private static final int INITIAL_BOOT_DELAY_SECONDS = 60;
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final int RETRY_DELAY_SECONDS = 15;
-    private static final int WEB_SERVER_PORT = 8080;
+    private static final int WEB_SERVER_PORT = 9093;
 
     private WebServer webServer;
     private boolean isBootConfigMode = false;
