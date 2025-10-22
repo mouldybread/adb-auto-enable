@@ -1,4 +1,4 @@
-package com.example.adbautoenable;
+package com.tpn.adbautoenable;
 
 import android.app.Activity;
 import android.os.Bundle;

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    package="com.example.adbautoenable">
+    package="com.tpn.tpn">
 
     <!-- Permissions -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -21,14 +21,14 @@
 
         <!-- Foreground Service -->
         <service
-            android:name=".AdbConfigService"
+            android:name="com.tpn.adbautoenable.AdbConfigService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
         <!-- Boot receiver -->
         <receiver
-            android:name=".BootReceiver"
+            android:name="com.tpn.adbautoenable.BootReceiver"
             android:enabled="true"
             android:exported="true"
             android:directBootAware="true"
@@ -41,7 +41,7 @@
 
         <!-- Main activity -->
         <activity
-            android:name=".MainActivity"
+            android:name="com.tpn.adbautoenable.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

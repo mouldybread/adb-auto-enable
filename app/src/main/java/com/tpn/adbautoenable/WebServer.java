@@ -1,4 +1,4 @@
-package com.example.adbautoenable;
+package com.tpn.adbautoenable;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -385,7 +385,7 @@ public class WebServer extends NanoHTTPD {
                 "        <h2>💻 Grant Permission (Required)</h2>\n" +
                 "        <div class='info'>\n" +
                 "            Connect from your computer and run:<br>\n" +
-                "            <code>adb shell pm grant com.example.adbautoenable android.permission.WRITE_SECURE_SETTINGS</code>\n" +
+                "            <code>adb shell pm grant package com.tpn.adbautoenable android.permission.WRITE_SECURE_SETTINGS</code>\n" +
                 "        </div>\n" +
                 "    </div>\n" +
                 "    \n" +

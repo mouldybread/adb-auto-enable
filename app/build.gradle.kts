@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "com.tpn.adbautoenable"
+    namespace = "com.tpn.tpn"
     compileSdk = 34
 
     defaultConfig {

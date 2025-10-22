@@ -1,4 +1,4 @@
-package com.example.adbautoenable;
+package com.tpn.adbautoenable;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
