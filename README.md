@@ -4,8 +4,17 @@
 
 Perfect for Chromecast with Google TV, Android TV boxes, and any Android device where you want persistent wireless ADB access without manual intervention.
 
-> [!IMPORTANT]
-> I am not a programmer. This was coded using AI. It works for me and I'm sharing it in the hopes it may be of use, or inspire someone else. Please do not expect much in the way of maintenance or support, I made this purely for my own use. That said if you do have a problem please feel free to open an issue.
+## Foreword
+
+Android 14 introduces enhanced ADB security which disables and randomises the port used after sleep/reboot, breaking my automation setup. Auto ADB Enable automatically re-enables wireless ADB, maintaining remote access for non-interactive devices.
+
+**However, this is likely a temporary workaround.** This app is part of a three-app ecosystem designed to progressively eliminate my ADB dependency:
+
+- **[Auto ADB Enable](https://github.com/mouldybread/adb-auto-enable)** (this app) - Stopgap to maintain ADB access
+- **[Display Launcher](https://github.com/mouldybread/DisplayLauncher)** - ADB-free app control via REST API
+- **[Android Stream Viewer](https://github.com/mouldybread/android-stream-viewer)** - ADB-free camera display with web configuration
+
+Used together, Display Launcher and Stream Viewer eliminate the need for ADB entirely. Display Launcher handles app launching (including Stream Viewer with specific cameras), while Stream Viewer provides fully web-configurable camera displays. Auto ADB Enable remains available for edge cases, but the long-term goal is complete ADB-free operation.
 
 > [!WARNING]
 > **SECURITY WARNING:** This application enables Android Debug Bridge (ADB) on port 5555, which provides remote access to your device with full system privileges. While ADB connections require RSA key authentication (users must accept the connection on first pairing), **once a computer is authorized, it has permanent unrestricted access** to install applications, access all data, execute shell commands, and take complete control of your device without further prompts. Additionally, the RSA authentication prompt is vulnerable to overlay attacks where malicious apps can trick users into authorizing connections. **This app should ONLY be used on isolated or trusted networks** (such as a home network behind a firewall with no port forwarding) and **NEVER on public WiFi, guest networks, or any network you do not fully control**. Exposing ADB to the internet or untrusted networks can result in complete device compromise if an attacker gains authorization, either through social engineering, overlay attacks, or physical access to previously paired computers. Use this tool only on devices you own and ensure your network is properly secured with a firewall blocking external access to port 5555.
