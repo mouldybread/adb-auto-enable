@@ -140,7 +140,7 @@ public class AdbConfigService extends Service {
     private void waitForWifiConnection() throws InterruptedException {
         Log.i(TAG, "Waiting for WiFi connection...");
         updateNotification("Waiting for WiFi...");
-        int maxWaitSeconds = 120;
+        int maxWaitSeconds = 60;
         int waitedSeconds = 0;
 
         while (waitedSeconds < maxWaitSeconds) {
@@ -259,7 +259,7 @@ public class AdbConfigService extends Service {
 
             Log.i(TAG, "Step 2: Waiting for ADB service to start...");
             updateNotification("Waiting for ADB service...");
-            Thread.sleep(10000);
+            Thread.sleep(30000);
 
             String deviceIP = getDeviceIP();
             Log.i(TAG, "Device IP: " + deviceIP);

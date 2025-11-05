@@ -106,12 +106,17 @@ public class AdbHelper {
 
         try {
             Log.i(TAG, "Connecting to " + host + ":" + port);
+
+            // Connect to the device
             adbManager.connect(host, port);
+
+            // Wait for connection to fully establish
+            Thread.sleep(1000);
 
             Log.i(TAG, "Sending tcpip:5555 service command");
             AdbStream stream = adbManager.openStream("tcpip:5555");
 
-            // Read response if any using InputStream
+            // Read response if any
             InputStream inputStream = stream.openInputStream();
             byte[] buffer = new byte[1024];
             int bytesRead = inputStream.read(buffer);
@@ -121,19 +126,21 @@ public class AdbHelper {
             }
 
             stream.close();
-            adbManager.close();
 
             // Wait for ADB to restart on new port
             Thread.sleep(3000);
 
+            // Close the old connection
+            adbManager.close();
+
             Log.i(TAG, "Successfully switched to port 5555");
             return true;
-
         } catch (Exception e) {
             Log.e(TAG, "Failed to switch to port 5555", e);
             return false;
         }
     }
+
 
     public boolean selfGrantPermission(String host, int port, String packageName, String permission) {
         if (adbManager == null) {
