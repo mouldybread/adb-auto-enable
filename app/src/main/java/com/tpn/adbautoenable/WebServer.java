@@ -243,16 +243,15 @@ public class WebServer extends NanoHTTPD {
         new Thread(() -> {
             try {
                 Log.i(TAG, "Web API: Discovering ADB port...");
-                String deviceIP = getDeviceIP();
-
                 int port = discoverAdbPort();
+
                 if (port == -1) {
                     Log.e(TAG, "Web API: Could not find ADB port");
                     return;
                 }
 
                 Log.i(TAG, "Web API: Found ADB on port " + port + ", switching to 5555...");
-                boolean success = adbHelper.switchToPort5555(deviceIP, port);
+                boolean success = adbHelper.switchToPort5555("127.0.0.1", port);  // Use localhost for port 5555
 
                 if (success) {
                     Log.i(TAG, "Web API: Successfully switched to port 5555");
@@ -263,11 +262,13 @@ public class WebServer extends NanoHTTPD {
             } catch (Exception e) {
                 Log.e(TAG, "Web API: Switch error", e);
             }
+
         }).start();
 
         return newFixedLengthResponse(Response.Status.OK, "application/json",
                 "{\"success\":true,\"message\":\"Port switch started. Check logs below for status.\"}");
     }
+
 
     private int discoverAdbPort() {
         final int[] discoveredPort = {-1};
@@ -311,26 +312,19 @@ public class WebServer extends NanoHTTPD {
 
                             int port = serviceInfo.getPort();
                             Log.i(TAG, "Host: " + host + ", Port: " + port);
-
                             if (host.startsWith("127.") || host.equals("::1") ||
                                     host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) {
                                 if (host.equals(deviceIP)) {
-                                    Log.i(TAG, "Found matching device with IP: " + deviceIP);
+                                    Log.i(TAG, "Found matching device with IP: " + deviceIP + ", Port: " + port);
                                     discoveredPort[0] = port;
-                                    latch.countDown();
-                                    if (discoveryListenerHolder[0] != null) {
-                                        try {
-                                            nsdManager.stopServiceDiscovery(discoveryListenerHolder[0]);
-                                        } catch (Exception e) {
-                                            Log.e(TAG, "Error stopping discovery", e);
-                                        }
-                                    }
+                                    // DON'T countdown - let timeout handle it to get the latest port
                                 } else {
                                     Log.w(TAG, "Skipping device with IP " + host + " (looking for " + deviceIP + ")");
                                 }
                             }
                         }
                     }
+
                 });
             }
 

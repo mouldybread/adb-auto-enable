@@ -98,59 +98,6 @@ public class AdbHelper {
         }
     }
 
-    public boolean switchToPort5555(String host, int port) {
-        if (adbManager == null) {
-            Log.e(TAG, "Cannot switch port - ADB manager is null");
-            return false;
-        }
-
-        try {
-            Log.i(TAG, "Connecting to " + host + ":" + port);
-
-            // Close any existing connection first
-            try {
-                adbManager.close();
-                Log.i(TAG, "Closed previous connection");
-            } catch (Exception e) {
-                Log.w(TAG, "Error closing previous connection: " + e.getMessage());
-            }
-
-            // Now connect fresh
-            adbManager.connect(host, port);
-            Log.i(TAG, "Connected successfully");
-
-            // Wait for connection to fully establish
-            Thread.sleep(1500);
-
-            Log.i(TAG, "Sending tcpip:5555 service command");
-            AdbStream stream = adbManager.openStream("tcpip:5555");
-
-            // Read response if any
-            InputStream inputStream = stream.openInputStream();
-            byte[] buffer = new byte[1024];
-            int bytesRead = inputStream.read(buffer);
-            if (bytesRead > 0) {
-                String response = new String(buffer, 0, bytesRead);
-                Log.i(TAG, "Response: " + response);
-            }
-
-            stream.close();
-
-            // Wait for ADB to restart on new port
-            Thread.sleep(3000);
-
-            // Close the connection
-            adbManager.close();
-            Log.i(TAG, "Successfully switched to port 5555");
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to switch to port 5555", e);
-            return false;
-        }
-    }
-
-
-
     public boolean selfGrantPermission(String host, int port, String packageName, String permission) {
         if (adbManager == null) {
             Log.e(TAG, "Cannot self-grant - ADB manager is null");
@@ -160,30 +107,17 @@ public class AdbHelper {
         try {
             Log.i(TAG, "Attempting to grant permission " + permission + " to " + packageName);
             adbManager.connect(host, port);
+            Log.i(TAG, "Connected, sending pm grant shell command");
 
-            Log.i(TAG, "Sending pm grant shell command");
+            // Check permission AFTER connecting
+            if (checkPermissionGranted(permission)) {
+                Log.i(TAG, "Permission " + permission + " is already granted, skipping grant");
+                return true;
+            }
+
             String command = "shell:pm grant " + packageName + " " + permission;
             AdbStream stream = adbManager.openStream(command);
-
-            // Read response if any using InputStream
-            InputStream inputStream = stream.openInputStream();
-            byte[] buffer = new byte[1024];
-            int bytesRead = inputStream.read(buffer);
-
-            String response = "";
-            if (bytesRead > 0) {
-                response = new String(buffer, 0, bytesRead);
-                Log.i(TAG, "Grant command response: " + response);
-            }
-
             stream.close();
-            adbManager.close();
-
-            // Check if there was an error in the response
-            if (response.toLowerCase().contains("error") || response.toLowerCase().contains("exception")) {
-                Log.e(TAG, "Permission grant failed: " + response);
-                return false;
-            }
 
             Log.i(TAG, "Successfully granted permission!");
             return true;
@@ -194,8 +128,85 @@ public class AdbHelper {
         }
     }
 
+
+    public boolean switchToPort5555(String host, int port) {
+        if (adbManager == null) {
+            Log.e(TAG, "Cannot switch port - ADB manager is null");
+            return false;
+        }
+
+        try {
+            Log.i(TAG, "switchToPort5555: Starting with host=" + host + ", port=" + port);
+
+            try {
+                Log.i(TAG, "switchToPort5555: Calling connect(" + host + ":" + port + ")");
+                adbManager.connect(host, port);
+                Log.i(TAG, "switchToPort5555: connect() completed successfully");
+            } catch (IOException e) {
+                Log.e(TAG, "switchToPort5555: IOException during connect()", e);
+                throw e;
+            }
+
+            Log.i(TAG, "switchToPort5555: Waiting for connection to stabilize");
+            Thread.sleep(200);
+
+            Log.i(TAG, "switchToPort5555: Sending tcpip:5555 service command");
+            AdbStream stream = adbManager.openStream("tcpip:5555");
+
+            Log.i(TAG, "switchToPort5555: Reading response from stream");
+            InputStream inputStream = stream.openInputStream();
+            byte[] buffer = new byte[1024];
+            int bytesRead = inputStream.read(buffer);
+            if (bytesRead > 0) {
+                String response = new String(buffer, 0, bytesRead);
+                Log.i(TAG, "switchToPort5555: Response received (" + bytesRead + " bytes): " + response);
+            } else {
+                Log.i(TAG, "switchToPort5555: No response data received");
+            }
+
+            Log.i(TAG, "switchToPort5555: Closing stream");
+            stream.close();
+
+            Log.i(TAG, "switchToPort5555: Closing adbManager connection");
+            adbManager.close();
+
+            Log.i(TAG, "switchToPort5555: Waiting 3000ms for ADB to restart on port 5555");
+            Thread.sleep(3000);
+
+            Log.i(TAG, "switchToPort5555: Successfully switched to port 5555");
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "switchToPort5555: Failed to switch to port 5555", e);
+            return false;
+        }
+    }
+
+    public boolean checkPermissionGranted(String permission) {
+        try {
+            Log.i(TAG, "Checking if permission is granted: " + permission);
+            String command = "shell:pm list permissions -g | grep " + permission;
+            AdbStream stream = adbManager.openStream(command);
+
+            InputStream inputStream = stream.openInputStream();
+            byte[] buffer = new byte[1024];
+            int bytesRead = inputStream.read(buffer);
+            String response = (bytesRead > 0) ? new String(buffer, 0, bytesRead) : "";
+
+            stream.close();
+
+            Log.i(TAG, "Permission check response: " + response);
+
+            boolean isGranted = response.contains(permission);
+            Log.i(TAG, "Permission " + permission + " is granted: " + isGranted);
+
+            return isGranted;
+        } catch (Exception e) {
+            Log.e(TAG, "Error checking permission", e);
+            return false;
+        }
+    }
+
     private static class SimpleAdbManager extends AbsAdbConnectionManager {
-        private static SimpleAdbManager INSTANCE;
         private PrivateKey privateKey;
         private PublicKey publicKey;
         private X509Certificate certificate;
@@ -204,17 +215,14 @@ public class AdbHelper {
         private final File certFile;
 
         public static synchronized SimpleAdbManager getInstance(Context context) {
-            if (INSTANCE == null) {
-                try {
-                    Log.i(TAG, "Creating new SimpleAdbManager instance");
-                    INSTANCE = new SimpleAdbManager(context);
-                    Log.i(TAG, "SimpleAdbManager instance created");
-                } catch (Exception e) {
-                    Log.e(TAG, "Failed to create SimpleAdbManager", e);
-                    return null;
-                }
+            // Always recreate on each call instead of keeping singleton
+            try {
+                Log.i(TAG, "Creating new SimpleAdbManager instance");
+                return new SimpleAdbManager(context);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to create SimpleAdbManager", e);
+                return null;
             }
-            return INSTANCE;
         }
 
         private SimpleAdbManager(Context context) throws Exception {

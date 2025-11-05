@@ -34,9 +34,9 @@ public class AdbConfigService extends Service {
     private static final String PREFS_NAME = "ADBAutoEnablePrefs";
     private static final String KEY_LAST_STATUS = "last_status";
     private static final String KEY_LAST_PORT = "last_port";
-    private static final int INITIAL_BOOT_DELAY_SECONDS = 60;
+    private static final int INITIAL_BOOT_DELAY_SECONDS = 30;
     private static final int MAX_RETRY_ATTEMPTS = 3;
-    private static final int RETRY_DELAY_SECONDS = 15;
+    private static final int RETRY_DELAY_SECONDS = 10;
     private static final int WEB_SERVER_PORT = 9093;
 
     private WebServer webServer;
@@ -259,7 +259,7 @@ public class AdbConfigService extends Service {
 
             Log.i(TAG, "Step 2: Waiting for ADB service to start...");
             updateNotification("Waiting for ADB service...");
-            Thread.sleep(30000);
+            Thread.sleep(15000);
 
             String deviceIP = getDeviceIP();
             Log.i(TAG, "Device IP: " + deviceIP);
@@ -297,7 +297,8 @@ public class AdbConfigService extends Service {
             updateStatus("Switching to port 5555...");
 
             AdbHelper adbHelper = new AdbHelper(this);
-            boolean success = adbHelper.switchToPort5555(deviceIP, port);
+            boolean success = adbHelper.switchToPort5555("127.0.0.1", port);  // Use localhost
+
 
             if (success) {
                 Log.i(TAG, "Successfully configured ADB on port 5555!");
@@ -333,7 +334,6 @@ public class AdbConfigService extends Service {
         final int[] discoveredPort = {-1};
         final CountDownLatch latch = new CountDownLatch(1);
         String deviceIP = getDeviceIP();
-
         Log.i(TAG, "Looking for mDNS service on device IP: " + deviceIP);
 
         NsdManager nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
@@ -372,20 +372,12 @@ public class AdbConfigService extends Service {
 
                             int port = serviceInfo.getPort();
                             Log.i(TAG, "Host: " + host + ", Port: " + port);
-
                             if (host.startsWith("127.") || host.equals("::1") ||
                                     host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) {
                                 if (host.equals(deviceIP)) {
-                                    Log.i(TAG, "Found matching device with IP: " + deviceIP);
+                                    Log.i(TAG, "Found matching device with IP: " + deviceIP + ", Port: " + port);
                                     discoveredPort[0] = port;
-                                    latch.countDown();
-                                    if (discoveryListenerHolder[0] != null) {
-                                        try {
-                                            nsdManager.stopServiceDiscovery(discoveryListenerHolder[0]);
-                                        } catch (Exception e) {
-                                            Log.e(TAG, "Error stopping discovery", e);
-                                        }
-                                    }
+                                    // DON'T countdown - let timeout handle it to get the latest port
                                 } else {
                                     Log.w(TAG, "Skipping device with IP " + host + " (looking for " + deviceIP + ")");
                                 }
@@ -421,21 +413,26 @@ public class AdbConfigService extends Service {
 
         try {
             nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
-            boolean found = latch.await(15, TimeUnit.SECONDS);
-            if (!found) {
-                Log.e(TAG, "mDNS discovery timed out after 15 seconds");
-                try {
-                    nsdManager.stopServiceDiscovery(discoveryListener);
-                } catch (Exception e) {
-                    Log.e(TAG, "Error stopping discovery after timeout", e);
+            // Wait full 10 seconds for discovery to find all updates and get the latest port
+            boolean found = latch.await(10, TimeUnit.SECONDS);
+            Log.i(TAG, "Discovery timeout reached, final port: " + discoveredPort[0]);
+
+            try {
+                if (discoveryListenerHolder[0] != null) {
+                    nsdManager.stopServiceDiscovery(discoveryListenerHolder[0]);
+                    Log.i(TAG, "Discovery stopped, using port: " + discoveredPort[0]);
                 }
+            } catch (Exception e) {
+                Log.e(TAG, "Error stopping discovery", e);
             }
+
         } catch (Exception e) {
             Log.e(TAG, "mDNS discovery error", e);
         }
 
         return discoveredPort[0];
     }
+
 
     private int scanForAdbPort() {
         Log.i(TAG, "Starting optimized port scan...");
