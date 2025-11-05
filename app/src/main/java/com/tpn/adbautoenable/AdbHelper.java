@@ -107,11 +107,20 @@ public class AdbHelper {
         try {
             Log.i(TAG, "Connecting to " + host + ":" + port);
 
-            // Connect to the device
+            // Close any existing connection first
+            try {
+                adbManager.close();
+                Log.i(TAG, "Closed previous connection");
+            } catch (Exception e) {
+                Log.w(TAG, "Error closing previous connection: " + e.getMessage());
+            }
+
+            // Now connect fresh
             adbManager.connect(host, port);
+            Log.i(TAG, "Connected successfully");
 
             // Wait for connection to fully establish
-            Thread.sleep(1000);
+            Thread.sleep(1500);
 
             Log.i(TAG, "Sending tcpip:5555 service command");
             AdbStream stream = adbManager.openStream("tcpip:5555");
@@ -130,9 +139,8 @@ public class AdbHelper {
             // Wait for ADB to restart on new port
             Thread.sleep(3000);
 
-            // Close the old connection
+            // Close the connection
             adbManager.close();
-
             Log.i(TAG, "Successfully switched to port 5555");
             return true;
         } catch (Exception e) {
@@ -140,6 +148,7 @@ public class AdbHelper {
             return false;
         }
     }
+
 
 
     public boolean selfGrantPermission(String host, int port, String packageName, String permission) {
