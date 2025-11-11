@@ -10,8 +10,8 @@ android {
         applicationId = "com.tpn.adbautoenable"
         minSdk = 21
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.2.4"
+        versionCode = 7
+        versionName = "0.2.6"
     }
 
     buildTypes {
