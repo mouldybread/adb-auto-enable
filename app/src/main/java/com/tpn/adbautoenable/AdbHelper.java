@@ -184,10 +184,13 @@ public class AdbHelper {
     public boolean checkPermissionGranted(String permission) {
         try {
             Log.i(TAG, "Checking if permission is granted: " + permission);
-            String command = "shell:pm list permissions -g | grep " + permission;
-            AdbStream stream = adbManager.openStream(command);
 
+            // Corrected command to check the grant status properly
+            String command = "shell:dumpsys package com.tpn.adbautoenable | grep " + permission;
+
+            AdbStream stream = adbManager.openStream(command);
             InputStream inputStream = stream.openInputStream();
+
             byte[] buffer = new byte[1024];
             int bytesRead = inputStream.read(buffer);
             String response = (bytesRead > 0) ? new String(buffer, 0, bytesRead) : "";
@@ -196,10 +199,13 @@ public class AdbHelper {
 
             Log.i(TAG, "Permission check response: " + response);
 
-            boolean isGranted = response.contains(permission);
+            // Corrected logic to check for "granted=true"
+            boolean isGranted = response.contains("granted=true");
+
             Log.i(TAG, "Permission " + permission + " is granted: " + isGranted);
 
             return isGranted;
+
         } catch (Exception e) {
             Log.e(TAG, "Error checking permission", e);
             return false;
