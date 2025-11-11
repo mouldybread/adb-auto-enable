@@ -4,6 +4,8 @@
 
 Perfect for Chromecast with Google TV, Android TV boxes, and any Android device where you want persistent wireless ADB access without manual intervention.
 
+
+
 ## Foreword
 
 Android 14 introduces enhanced ADB security which disables and randomises the port used after sleep/reboot, breaking my automation setup. Auto ADB Enable automatically re-enables wireless ADB, maintaining remote access for non-interactive devices.
@@ -58,7 +60,7 @@ Used together, Display Launcher and Stream Viewer eliminate the need for ADB ent
 
 ### 1. Installation
 
-Download and install the APK from [Releases](https://github.com/yourusername/adb-auto-enable/releases), or build from source:
+Download and install the APK from [Releases](https://github.com/mouldybread/adb-auto-enable/releases), or build from source:
 
 ```bash
 git clone https://github.com/mouldybread/adb-auto-enable.git
@@ -308,7 +310,3 @@ Permission granted autonomously!
 - Inspired by various Tasker projects and Magisk modules
 - Uses [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd) for embedded web server
 - Uses [libadb-android](https://github.com/MuntashirAkon/libadb-android) for ADB protocol implementation
-
-## ⚠️ Disclaimer
-
-This app modifies system settings and enables wireless ADB debugging. Only use on devices you own and control. Enabling wireless ADB debugging can pose security risks if not properly secured on your network.
