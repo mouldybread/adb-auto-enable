@@ -41,9 +41,11 @@ import java.util.Date;
 
 public class AdbHelper {
     private static final String TAG = "ADBAutoEnable";
-    private final SimpleAdbManager adbManager;
+    private final Context context;
 
     public AdbHelper(Context context) {
+        this.context = context;  // ← Assign FIRST, outside try-catch
+
         try {
             // Install security providers
             Log.i(TAG, "Installing security providers");
@@ -51,124 +53,117 @@ public class AdbHelper {
             if (Security.getProvider("BC") == null) {
                 Security.addProvider(new BouncyCastleProvider());
             }
-
-            Log.i(TAG, "Creating ADB manager");
-            this.adbManager = SimpleAdbManager.getInstance(context);
-            if (this.adbManager == null) {
-                Log.e(TAG, "ADB manager is null after getInstance");
-            } else {
-                Log.i(TAG, "ADB manager created successfully");
-            }
-
+            Log.i(TAG, "AdbHelper initialized successfully");
         } catch (Exception e) {
-            Log.e(TAG, "Failed to initialize ADB helper", e);
-            throw new RuntimeException("Failed to initialize ADB helper", e);
+            Log.e(TAG, "Failed to initialize security providers", e);
+            // Don't throw - providers might work later or may already be initialized
         }
     }
 
     public boolean pair(String host, int port, String code) {
-        if (adbManager == null) {
-            Log.e(TAG, "Cannot pair - ADB manager is null");
-            return false;
-        }
-
+        SimpleAdbManager manager = null;
         try {
             Log.i(TAG, "Pairing with " + host + ":" + port + " using code: " + code);
-            adbManager.pair(host, port, code);
+            manager = new SimpleAdbManager(context);
+            manager.pair(host, port, code);
             Log.i(TAG, "Pairing successful!");
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Pairing failed", e);
             return false;
+        } finally {
+            if (manager != null) {
+                try {
+                    manager.close();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error closing manager after pair", e);
+                }
+            }
         }
     }
 
     public boolean connect(String host, int port) {
-        if (adbManager == null) {
-            Log.e(TAG, "Cannot connect - ADB manager is null");
-            return false;
-        }
-
+        SimpleAdbManager manager = null;
         try {
-            adbManager.connect(host, port);
+            manager = new SimpleAdbManager(context);
+            manager.connect(host, port);
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Connect failed", e);
             return false;
+        } finally {
+            if (manager != null) {
+                try {
+                    manager.close();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error closing manager after connect", e);
+                }
+            }
         }
     }
 
     public boolean selfGrantPermission(String host, int port, String packageName, String permission) {
-        if (adbManager == null) {
-            Log.e(TAG, "Cannot self-grant - ADB manager is null");
-            return false;
-        }
-
+        SimpleAdbManager manager = null;
         try {
             Log.i(TAG, "Attempting to grant permission " + permission + " to " + packageName);
-            adbManager.connect(host, port);
+            manager = new SimpleAdbManager(context);
+            manager.connect(host, port);
             Log.i(TAG, "Connected, sending pm grant shell command");
 
-            // Check permission AFTER connecting
-            if (checkPermissionGranted(permission)) {
+            // Check if already granted
+            if (checkPermissionGranted(manager, permission)) {
                 Log.i(TAG, "Permission " + permission + " is already granted, skipping grant");
                 return true;
             }
 
             String command = "shell:pm grant " + packageName + " " + permission;
-            AdbStream stream = adbManager.openStream(command);
-            stream.close();
-
+            try (AdbStream stream = manager.openStream(command)) {
+                // Stream automatically closed
+            }
             Log.i(TAG, "Successfully granted permission!");
             return true;
-
         } catch (Exception e) {
             Log.e(TAG, "Failed to grant permission", e);
             return false;
+        } finally {
+            if (manager != null) {
+                try {
+                    manager.close();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error closing manager after selfGrant", e);
+                }
+            }
         }
     }
 
-
     public boolean switchToPort5555(String host, int port) {
-        if (adbManager == null) {
-            Log.e(TAG, "Cannot switch port - ADB manager is null");
-            return false;
-        }
-
+        SimpleAdbManager manager = null;
         try {
             Log.i(TAG, "switchToPort5555: Starting with host=" + host + ", port=" + port);
+            manager = new SimpleAdbManager(context);
 
-            try {
-                Log.i(TAG, "switchToPort5555: Calling connect(" + host + ":" + port + ")");
-                adbManager.connect(host, port);
-                Log.i(TAG, "switchToPort5555: connect() completed successfully");
-            } catch (IOException e) {
-                Log.e(TAG, "switchToPort5555: IOException during connect()", e);
-                throw e;
-            }
+            Log.i(TAG, "switchToPort5555: Calling connect(" + host + ":" + port + ")");
+            manager.connect(host, port);
+            Log.i(TAG, "switchToPort5555: connect() completed successfully");
 
             Log.i(TAG, "switchToPort5555: Waiting for connection to stabilize");
             Thread.sleep(200);
 
             Log.i(TAG, "switchToPort5555: Sending tcpip:5555 service command");
-            AdbStream stream = adbManager.openStream("tcpip:5555");
+            try (AdbStream stream = manager.openStream("tcpip:5555");
+                 InputStream inputStream = stream.openInputStream()) {
 
-            Log.i(TAG, "switchToPort5555: Reading response from stream");
-            InputStream inputStream = stream.openInputStream();
-            byte[] buffer = new byte[1024];
-            int bytesRead = inputStream.read(buffer);
-            if (bytesRead > 0) {
-                String response = new String(buffer, 0, bytesRead);
-                Log.i(TAG, "switchToPort5555: Response received (" + bytesRead + " bytes): " + response);
-            } else {
-                Log.i(TAG, "switchToPort5555: No response data received");
+                Log.i(TAG, "switchToPort5555: Reading response from stream");
+                byte[] buffer = new byte[1024];
+                int bytesRead = inputStream.read(buffer);
+
+                if (bytesRead > 0) {
+                    String response = new String(buffer, 0, bytesRead);
+                    Log.i(TAG, "switchToPort5555: Response received (" + bytesRead + " bytes): " + response);
+                } else {
+                    Log.i(TAG, "switchToPort5555: No response data received");
+                }
             }
-
-            Log.i(TAG, "switchToPort5555: Closing stream");
-            stream.close();
-
-            Log.i(TAG, "switchToPort5555: Closing adbManager connection");
-            adbManager.close();
 
             Log.i(TAG, "switchToPort5555: Waiting 3000ms for ADB to restart on port 5555");
             Thread.sleep(3000);
@@ -178,34 +173,34 @@ public class AdbHelper {
         } catch (Exception e) {
             Log.e(TAG, "switchToPort5555: Failed to switch to port 5555", e);
             return false;
+        } finally {
+            if (manager != null) {
+                try {
+                    manager.close();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error closing manager after switchToPort5555", e);
+                }
+            }
         }
     }
 
-    public boolean checkPermissionGranted(String permission) {
+    private boolean checkPermissionGranted(SimpleAdbManager manager, String permission) {
         try {
             Log.i(TAG, "Checking if permission is granted: " + permission);
-
-            // Corrected command to check the grant status properly
             String command = "shell:dumpsys package com.tpn.adbautoenable | grep " + permission;
 
-            AdbStream stream = adbManager.openStream(command);
-            InputStream inputStream = stream.openInputStream();
+            try (AdbStream stream = manager.openStream(command);
+                 InputStream inputStream = stream.openInputStream()) {
 
-            byte[] buffer = new byte[1024];
-            int bytesRead = inputStream.read(buffer);
-            String response = (bytesRead > 0) ? new String(buffer, 0, bytesRead) : "";
+                byte[] buffer = new byte[1024];
+                int bytesRead = inputStream.read(buffer);
+                String response = (bytesRead > 0) ? new String(buffer, 0, bytesRead) : "";
 
-            stream.close();
-
-            Log.i(TAG, "Permission check response: " + response);
-
-            // Corrected logic to check for "granted=true"
-            boolean isGranted = response.contains("granted=true");
-
-            Log.i(TAG, "Permission " + permission + " is granted: " + isGranted);
-
-            return isGranted;
-
+                Log.i(TAG, "Permission check response: " + response);
+                boolean isGranted = response.contains("granted=true");
+                Log.i(TAG, "Permission " + permission + " is granted: " + isGranted);
+                return isGranted;
+            }
         } catch (Exception e) {
             Log.e(TAG, "Error checking permission", e);
             return false;
@@ -220,25 +215,12 @@ public class AdbHelper {
         private final File pubKeyFile;
         private final File certFile;
 
-        public static synchronized SimpleAdbManager getInstance(Context context) {
-            // Always recreate on each call instead of keeping singleton
-            try {
-                Log.i(TAG, "Creating new SimpleAdbManager instance");
-                return new SimpleAdbManager(context);
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to create SimpleAdbManager", e);
-                return null;
-            }
-        }
-
-        private SimpleAdbManager(Context context) throws Exception {
+        public SimpleAdbManager(Context context) throws Exception {
             Log.i(TAG, "SimpleAdbManager constructor starting");
             setApi(Build.VERSION.SDK_INT);
-
             keyFile = new File(context.getFilesDir(), "adb_key");
             pubKeyFile = new File(context.getFilesDir(), "adb_key.pub");
             certFile = new File(context.getFilesDir(), "adb_cert");
-
             Log.i(TAG, "Key files: " + keyFile.getAbsolutePath());
             loadOrGenerateKeyPair();
             Log.i(TAG, "SimpleAdbManager initialized successfully");
@@ -272,6 +254,7 @@ public class AdbHelper {
                     Log.e(TAG, "Failed to load existing keys, generating new ones", e);
                     generateNewKeyPairAndCert();
                 }
+
             } else {
                 Log.i(TAG, "No existing keys found, generating new ones");
                 generateNewKeyPairAndCert();
@@ -314,7 +297,6 @@ public class AdbHelper {
             writeFileBytes(keyFile, privateKey.getEncoded());
             writeFileBytes(pubKeyFile, publicKey.getEncoded());
             writeFileBytes(certFile, certificate.getEncoded());
-
             Log.i(TAG, "Keys and certificate saved successfully");
         }
 
@@ -323,7 +305,6 @@ public class AdbHelper {
             BigInteger serial = BigInteger.valueOf(System.currentTimeMillis());
             Date notBefore = new Date(System.currentTimeMillis() - 24 * 60 * 60 * 1000L);
             Date notAfter = new Date(System.currentTimeMillis() + 365L * 24 * 60 * 60 * 1000);
-
             SubjectPublicKeyInfo publicKeyInfo = SubjectPublicKeyInfo.getInstance(keyPair.getPublic().getEncoded());
 
             X509v3CertificateBuilder certBuilder = new X509v3CertificateBuilder(
@@ -339,7 +320,6 @@ public class AdbHelper {
                     .build(keyPair.getPrivate());
 
             X509CertificateHolder certHolder = certBuilder.build(signer);
-
             return new JcaX509CertificateConverter()
                     .getCertificate(certHolder);
         }

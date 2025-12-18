@@ -30,7 +30,7 @@ public class WebServer extends NanoHTTPD {
 
     private final Context context;
     private final AdbHelper adbHelper;
-
+    private Boolean permissionCached = null;
     public WebServer(Context context, int port) {
         super(port);
         this.context = context;
@@ -130,41 +130,90 @@ public class WebServer extends NanoHTTPD {
         }
     }
 
+
+
     private Response handleStatus() {
+        Log.d(TAG, "handleStatus() called - creating socket for port check");
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         String lastStatus = prefs.getString("last_status", "Not run yet");
         int lastPort = prefs.getInt("last_port", -1);
         boolean isPaired = prefs.getBoolean("is_paired", false);
-        boolean hasPermission;
+
+        Log.d(TAG, "handleStatus() - calling checkPort5555()");
         boolean adb5555Available = checkPort5555();
 
-        try {
-            Settings.Global.putInt(context.getContentResolver(), "adb_wifi_enabled", 1);
-            hasPermission = true;
-        } catch (SecurityException e) {
-            hasPermission = false;
+        // Cache permission check - only do it once
+        if (permissionCached == null) {
+            Log.d(TAG, "handleStatus() - checking WRITE_SECURE_SETTINGS permission (cached)");
+            try {
+                Settings.Global.putInt(context.getContentResolver(), "adb_wifi_enabled", 1);
+                permissionCached = true;
+                Log.d(TAG, "handleStatus() - permission check SUCCESS");
+            } catch (SecurityException e) {
+                permissionCached = false;
+                Log.d(TAG, "handleStatus() - permission check FAILED");
+            }
         }
 
         String json = String.format(Locale.US,
                 "{\"lastStatus\":\"%s\",\"lastPort\":%d,\"isPaired\":%b,\"hasPermission\":%b,\"adb5555Available\":%b}",
-                lastStatus, lastPort, isPaired, hasPermission, adb5555Available
+                lastStatus, lastPort, isPaired, permissionCached, adb5555Available
         );
-
+        Log.d(TAG, "handleStatus() completed");
         return newFixedLengthResponse(Response.Status.OK, "application/json", json);
     }
 
-    private Response handleLogs() {
+
+    private boolean checkPermission() {
         try {
-            Process process = Runtime.getRuntime().exec(new String[]{"logcat", "-d", "-s", "ADBAutoEnable:*"});
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            // Just READ, don't write!
+            Settings.Global.getInt(context.getContentResolver(), "adb_wifi_enabled", 0);
+            return true;
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+
+    // Cache the permission check result
+    private Boolean cachedPermissionCheck = null;
+
+    private boolean checkWriteSettingsPermission() {
+        if (cachedPermissionCheck != null) {
+            return cachedPermissionCheck;
+        }
+
+        try {
+            // Just CHECK, don't actually write
+            int current = Settings.Global.getInt(context.getContentResolver(), "adb_wifi_enabled", 0);
+            cachedPermissionCheck = true;  // If we can read, we likely have permission
+            return true;
+        } catch (Exception e) {
+            cachedPermissionCheck = false;
+            return false;
+        }
+    }
+
+
+    private Response handleLogs() {
+        Log.d(TAG, "handleLogs() called - spawning logcat process");
+        Process process = null;
+        try {
+            process = Runtime.getRuntime().exec(new String[]{"logcat", "-d", "-s", "ADBAutoEnable:*"});
+
             StringBuilder logs = new StringBuilder();
-            String line;
+            // Use try-with-resources for BOTH InputStreamReader and BufferedReader
+            try (InputStreamReader isr = new InputStreamReader(process.getInputStream());
+                 BufferedReader reader = new BufferedReader(isr)) {
 
-            while ((line = reader.readLine()) != null) {
-                logs.append(line).append("\n");
-            }
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    logs.append(line).append("\n");
+                }
+            } // Readers automatically closed here
 
-            reader.close();
+            // Wait for process to complete
+            process.waitFor();
 
             String logsText = logs.toString();
             if (logsText.isEmpty()) {
@@ -177,15 +226,22 @@ public class WebServer extends NanoHTTPD {
                     .replace("\r", "\\r")
                     .replace("\t", "\\t");
 
+            Log.d(TAG, "handleLogs() completed - returning " + logsText.length() + " characters");
             return newFixedLengthResponse(Response.Status.OK, "application/json",
                     "{\"logs\":\"" + logsText + "\"}");
-
         } catch (Exception e) {
             Log.e(TAG, "Failed to read logs", e);
             return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
                     "{\"error\":\"Failed to read logs: " + e.getMessage() + "\"}");
+        } finally {
+            if (process != null) {
+                process.destroy();
+                Log.d(TAG, "handleLogs() - process destroyed");
+            }
         }
     }
+
+
 
     private Response handleReset() {
         try {
