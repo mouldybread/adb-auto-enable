@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace = "com.tpn.tpn"
+    namespace = "com.tpn.adbautoenable"
     compileSdk = 34
 
     defaultConfig {
         applicationId = "com.tpn.adbautoenable"
         minSdk = 21
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.2.6"
+        versionCode = 8
+        versionName = "0.2.7"
     }
 
     signingConfigs {
