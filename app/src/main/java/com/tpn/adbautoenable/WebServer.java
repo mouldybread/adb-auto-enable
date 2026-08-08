@@ -277,7 +277,7 @@ public class WebServer extends NanoHTTPD {
 
     private boolean checkPort5555() {
         try {
-            Socket socket = new Socket("127.0.0.1", 5555);
+            Socket socket = new Socket(getDeviceIP(), 5555);
             socket.close();
             return true;
         } catch (Exception e) {
@@ -306,8 +306,9 @@ public class WebServer extends NanoHTTPD {
                     return;
                 }
 
+                String deviceIP = getDeviceIP();
                 Log.i(TAG, "Web API: Found ADB on port " + port + ", switching to 5555...");
-                boolean success = adbHelper.switchToPort5555("127.0.0.1", port);  // Use localhost for port 5555
+                boolean success = adbHelper.switchToPort5555(deviceIP, port);  // Use the device's own LAN IP; loopback doesn't work on all devices
 
                 if (success) {
                     Log.i(TAG, "Web API: Successfully switched to port 5555");

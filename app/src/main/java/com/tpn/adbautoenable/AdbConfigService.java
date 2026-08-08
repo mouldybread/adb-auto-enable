@@ -297,7 +297,7 @@ public class AdbConfigService extends Service {
             updateStatus("Switching to port 5555...");
 
             AdbHelper adbHelper = new AdbHelper(this);
-            boolean success = adbHelper.switchToPort5555("127.0.0.1", port);  // Use localhost
+            boolean success = adbHelper.switchToPort5555(deviceIP, port);  // Use the device's own LAN IP; loopback doesn't work on all devices
 
 
             if (success) {
