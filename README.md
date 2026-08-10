@@ -111,7 +111,6 @@ The web server runs on port 9093 in a foreground service. If you can't access it
 2. Verify the device IP address on the main app screen.
 3. Ensure you are accessing from the same network subnet: `http://device-ip:9093`.
 
----
 ## Technical Details
 
 ###  Project Structure
@@ -162,8 +161,6 @@ Send tcpip:<target_port> command
   ↓
 Success! (with 3 retry attempts if needed)
 ```
-
----
 
 ## Acknowledgments
 
