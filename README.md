@@ -53,18 +53,13 @@ adb install app/build/outputs/apk/release/app-release.apk
 4. Click **"Pair Device"**.
 5. The app will automatically attempt to self-grant required permissions!
 
-### 3. Configure Target Port
-
-1. In the app UI on your device, view or edit the **Target ADB Port** field (default is `5555`).
-2. Tap **"Save Port"**.
-
-### 4. Verify Setup
+### 3. Verify Setup
 
 1. Check the web UI status — Permission should show "✓ Granted".
 2. Click **"Switch Target Port Now"** in the web interface to test the configuration manually.
 3. Check status — should show "✓ Available".
 
-### 5. Test Auto-Boot
+### 4. Test Auto-Boot
 
 Reboot your device:
 
