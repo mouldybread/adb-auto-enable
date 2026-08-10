@@ -269,7 +269,13 @@ public class AdbConfigService extends Service {
             updateStatus("Switching to port " + targetPort + "...");
 
             AdbHelper adbHelper = new AdbHelper(this);
-            boolean success = adbHelper.switchToPort("127.0.0.1", port, targetPort);  // Use localhost and dynamic target port
+
+            // Try live device IP first (fixes #8 on Chromecast / TV devices)
+            boolean success = adbHelper.switchToPort(deviceIP, port, targetPort);
+            if (!success && !deviceIP.equals("127.0.0.1")) {
+                Log.i(TAG, "Switch failed via " + deviceIP + ", falling back to loopback (127.0.0.1)...");
+                success = adbHelper.switchToPort("127.0.0.1", port, targetPort);
+            }
 
             if (success) {
                 Log.i(TAG, "Successfully configured ADB on port " + targetPort + "!");
