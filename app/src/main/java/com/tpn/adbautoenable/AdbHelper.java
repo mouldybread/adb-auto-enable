@@ -41,17 +41,19 @@ public class AdbHelper {
     private final Context context;
 
     public AdbHelper(Context context) {
-        this.context = context;  // ← Assign FIRST, outside try-catch
+        this.context = context;
 
         try {
-            // Install security providers
-            Security.insertProviderAt(Conscrypt.newProvider(), 1);
-            if (Security.getProvider("BC") == null) {
-                Security.addProvider(new BouncyCastleProvider());
-            }
+            // Remove Android's legacy built-in BC provider so the modern bundled version is used
+            Security.removeProvider("BC");
 
+            // Insert the modern BouncyCastle and Conscrypt providers
+            Security.insertProviderAt(new BouncyCastleProvider(), 1);
+            Security.insertProviderAt(Conscrypt.newProvider(), 2);
+
+            Log.i(TAG, "Security providers initialized successfully");
         } catch (Exception e) {
-            // Don't throw - providers might work later or may already be initialized
+            Log.e(TAG, "Error setting up security providers", e);
         }
     }
 
@@ -88,31 +90,58 @@ public class AdbHelper {
     }
 
     public boolean selfGrantPermission(String host, int port, String packageName, String permission) {
+        // Try active host/IP first
+        if (executeSelfGrant(host, port, packageName, permission)) {
+            return true;
+        }
+        // Fall back to loopback if different
+        if (!host.equals("127.0.0.1")) {
+            Log.i(TAG, "Self-grant failed via " + host + ", retrying via loopback (127.0.0.1)...");
+            return executeSelfGrant("127.0.0.1", port, packageName, permission);
+        }
+        return false;
+    }
+
+    private boolean executeSelfGrant(String host, int port, String packageName, String permission) {
         SimpleAdbManager manager = null;
         try {
-            Log.i(TAG, "Attempting to grant permission " + permission + " to " + packageName);
+            Log.i(TAG, "Attempting self-grant on " + host + ":" + port + " for package " + packageName);
             manager = new SimpleAdbManager(context);
             manager.connect(host, port);
-            Log.i(TAG, "Connected, sending pm grant shell command");
 
             // Check if already granted
-            if (checkPermissionGranted(manager, permission)) {
+            if (checkPermissionGranted(manager, packageName, permission)) {
                 Log.i(TAG, "Permission " + permission + " is already granted, skipping grant");
                 return true;
             }
 
+            Log.i(TAG, "Connected, sending pm grant shell command...");
             String command = "shell:pm grant " + packageName + " " + permission;
             try (AdbStream stream = manager.openStream(command);
                  InputStream is = stream.openInputStream()) {
                 byte[] buffer = new byte[1024];
                 while (is.read(buffer) != -1) {
-                    // Drain stream
+                    // Drain stream completely
                 }
+            } catch (Exception e) {
+                Log.d(TAG, "Stream read completed: " + e.getMessage());
             }
-            Log.i(TAG, "Successfully granted permission!");
-            return true;
+
+            // Allow PackageManagerService 1 second to apply the permission change
+            Log.i(TAG, "Waiting 1000ms for PackageManagerService to process grant...");
+            Thread.sleep(1000);
+
+            // Verify permission status
+            boolean isGranted = checkPermissionGranted(manager, packageName, permission);
+            if (isGranted) {
+                Log.i(TAG, "Successfully granted permission " + permission + "!");
+                return true;
+            } else {
+                Log.w(TAG, "pm grant executed but dumpsys returned granted=false");
+                return false;
+            }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to grant permission", e);
+            Log.e(TAG, "Failed to grant permission on " + host + ":" + port, e);
             return false;
         } finally {
             if (manager != null) {
@@ -128,7 +157,7 @@ public class AdbHelper {
     /**
      * Switches ADB from its current port to a target TCP port.
      *
-     * @param host       The host address (e.g. "127.0.0.1")
+     * @param host       The host address (e.g. "192.168.x.x" or "127.0.0.1")
      * @param port       The currently active ADB port (e.g. mDNS paired port)
      * @param targetPort The desired target port (e.g. 5555, 65432, etc.)
      * @return true if command was sent successfully
@@ -160,6 +189,8 @@ public class AdbHelper {
                 } else {
                     Log.i(TAG, "switchToPort: No response data received");
                 }
+            } catch (Exception e) {
+                Log.d(TAG, "switchToPort stream read completed: " + e.getMessage());
             }
 
             Log.i(TAG, "switchToPort: Waiting 3000ms for ADB to restart on port " + targetPort);
@@ -188,23 +219,29 @@ public class AdbHelper {
         return switchToPort(host, port, 5555);
     }
 
-    private boolean checkPermissionGranted(SimpleAdbManager manager, String permission) {
+    private boolean checkPermissionGranted(SimpleAdbManager manager, String packageName, String permission) {
         try {
             Log.i(TAG, "Checking if permission is granted: " + permission);
-            String command = "shell:dumpsys package com.tpn.adbautoenable | grep " + permission;
+            String command = "shell:dumpsys package " + packageName + " | grep " + permission;
 
+            StringBuilder sb = new StringBuilder();
             try (AdbStream stream = manager.openStream(command);
                  InputStream inputStream = stream.openInputStream()) {
 
                 byte[] buffer = new byte[1024];
-                int bytesRead = inputStream.read(buffer);
-                String response = (bytesRead > 0) ? new String(buffer, 0, bytesRead) : "";
-
-                Log.i(TAG, "Permission check response: " + response);
-                boolean isGranted = response.contains("granted=true");
-                Log.i(TAG, "Permission " + permission + " is granted: " + isGranted);
-                return isGranted;
+                int bytesRead;
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    sb.append(new String(buffer, 0, bytesRead));
+                }
+            } catch (Exception e) {
+                Log.d(TAG, "Stream check read completed: " + e.getMessage());
             }
+
+            String response = sb.toString();
+            Log.i(TAG, "Permission check response:\n" + response);
+            boolean isGranted = response.contains(permission + ": granted=true");
+            Log.i(TAG, "Permission " + permission + " is granted: " + isGranted);
+            return isGranted;
         } catch (Exception e) {
             Log.e(TAG, "Error checking permission", e);
             return false;
@@ -320,11 +357,13 @@ public class AdbHelper {
                     publicKeyInfo
             );
 
-            ContentSigner signer = new JcaContentSignerBuilder("SHA250withRSA")
+            ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
+                    .setProvider("BC")
                     .build(keyPair.getPrivate());
 
             X509CertificateHolder certHolder = certBuilder.build(signer);
             return new JcaX509CertificateConverter()
+                    .setProvider("BC")
                     .getCertificate(certHolder);
         }
 

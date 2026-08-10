@@ -49,6 +49,8 @@ public class WebServer extends NanoHTTPD {
             return handleTest();
         } else if (uri.equals("/api/switch")) {
             return handleSwitch();
+        } else if (uri.equals("/api/port") && method == Method.POST) {
+            return handleSetPort(session);
         } else if (uri.equals("/api/logs")) {
             return handleLogs();
         } else if (uri.equals("/api/reset") && method == Method.POST) {
@@ -98,8 +100,9 @@ public class WebServer extends NanoHTTPD {
                             return;
                         }
 
-                        Log.i(TAG, "Found ADB on port " + adbPort + ", attempting self-grant");
-                        boolean granted = adbHelper.selfGrantPermission("127.0.0.1", adbPort,
+                        String deviceIP = getDeviceIP();
+                        Log.i(TAG, "Found ADB on port " + adbPort + ", attempting self-grant via " + deviceIP);
+                        boolean granted = adbHelper.selfGrantPermission(deviceIP, adbPort,
                                 "com.tpn.adbautoenable", "android.permission.WRITE_SECURE_SETTINGS");
 
                         if (granted) {
@@ -130,11 +133,12 @@ public class WebServer extends NanoHTTPD {
     }
 
     private Response handleStatus() {
-        Log.d(TAG, "handleStatus() called - checking target port");
+        Log.d(TAG, "handleStatus() called - checking status");
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         String lastStatus = prefs.getString("last_status", "Not run yet");
-        int lastPort = prefs.getInt("last_port", -1);
         boolean isPaired = prefs.getBoolean("is_paired", false);
+        int targetPort = getTargetPort();
+        int currentPort = getCurrentPort();
 
         boolean adbTargetAvailable = checkTargetPortAvailable();
 
@@ -152,11 +156,46 @@ public class WebServer extends NanoHTTPD {
         }
 
         String json = String.format(Locale.US,
-                "{\"lastStatus\":\"%s\",\"lastPort\":%d,\"isPaired\":%b,\"hasPermission\":%b,\"adb5555Available\":%b}",
-                lastStatus, lastPort, isPaired, permissionCached, adbTargetAvailable
+                "{\"lastStatus\":\"%s\",\"currentPort\":%d,\"isPaired\":%b,\"hasPermission\":%b,\"adb5555Available\":%b,\"targetPort\":%d}",
+                lastStatus, currentPort, isPaired, permissionCached, adbTargetAvailable, targetPort
         );
         Log.d(TAG, "handleStatus() completed");
         return newFixedLengthResponse(Response.Status.OK, "application/json", json);
+    }
+
+    private Response handleSetPort(IHTTPSession session) {
+        try {
+            Map<String, String> files = new HashMap<>();
+            session.parseBody(files);
+            Map<String, List<String>> params = session.getParameters();
+            List<String> portList = params.get("port");
+            String portStr = (portList != null && !portList.isEmpty()) ? portList.get(0) : null;
+
+            if (portStr == null || portStr.isEmpty()) {
+                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                        "{\"error\":\"Port required\"}");
+            }
+
+            int port = Integer.parseInt(portStr);
+            if (port < 1 || port > 65535) {
+                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                        "{\"error\":\"Invalid port range (1-65535)\"}");
+            }
+
+            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            prefs.edit().putInt(KEY_TARGET_PORT, port).apply();
+            Log.i(TAG, "Web API: Target port updated to " + port);
+
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                    "{\"success\":true,\"message\":\"Target port updated successfully to " + port + "\"}");
+        } catch (NumberFormatException e) {
+            return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                    "{\"error\":\"Invalid port number\"}");
+        } catch (Exception e) {
+            Log.e(TAG, "Web API: Set port error", e);
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                    "{\"error\":\"" + e.getMessage() + "\"}");
+        }
     }
 
     private Response handleLogs() {
@@ -243,6 +282,33 @@ public class WebServer extends NanoHTTPD {
 
         // Fallback to loopback
         return checkSocket("127.0.0.1", targetPort);
+    }
+
+    private int getCurrentPort() {
+        int targetPort = getTargetPort();
+        String deviceIP = getDeviceIP();
+
+        // Check target port first
+        if (!deviceIP.equals("127.0.0.1") && checkSocket(deviceIP, targetPort)) {
+            return targetPort;
+        }
+        if (checkSocket("127.0.0.1", targetPort)) {
+            return targetPort;
+        }
+
+        // Check last known successful port if different from target
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        int lastPort = prefs.getInt("last_port", -1);
+        if (lastPort > 0 && lastPort != targetPort) {
+            if (!deviceIP.equals("127.0.0.1") && checkSocket(deviceIP, lastPort)) {
+                return lastPort;
+            }
+            if (checkSocket("127.0.0.1", lastPort)) {
+                return lastPort;
+            }
+        }
+
+        return -1;
     }
 
     private boolean checkSocket(String host, int port) {
@@ -418,15 +484,19 @@ public class WebServer extends NanoHTTPD {
                 "    <title>ADB Auto-Enable Configuration</title>\n" +
                 "    <style>\n" +
                 "        body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; padding: 20px; background: #f5f5f5; }\n" +
+                "        .status-bar { position: sticky; top: 0; z-index: 1000; background: #2196F3; color: white; padding: 12px 20px; border-radius: 6px; margin-bottom: 20px; display: flex; align-items: center; box-shadow: 0 4px 6px rgba(0,0,0,0.15); transition: background 0.3s; }\n" +
+                "        .status-bar.success { background: #4CAF50; }\n" +
+                "        .status-bar.error { background: #f44336; }\n" +
+                "        .spinner { width: 18px; height: 18px; border: 3px solid rgba(255,255,255,0.3); border-top: 3px solid white; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 12px; flex-shrink: 0; display: none; }\n" +
+                "        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }\n" +
                 "        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }\n" +
                 "        h1 { color: #333; margin-top: 0; }\n" +
                 "        h2 { color: #666; font-size: 18px; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }\n" +
                 "        button { background: #4CAF50; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 4px; cursor: pointer; margin: 5px; }\n" +
-                "        button:hover { background: #45a049; }\n" +
+                "        button:hover { opacity: 0.9; }\n" +
                 "        button.secondary { background: #2196F3; }\n" +
-                "        button.secondary:hover { background: #0b7dda; }\n" +
+                "        button.warning { background: #ff9800; }\n" +
                 "        button.danger { background: #f44336; }\n" +
-                "        button.danger:hover { background: #da190b; }\n" +
                 "        input { padding: 10px; font-size: 14px; border: 1px solid #ddd; border-radius: 4px; width: 200px; margin: 5px; }\n" +
                 "        .status { padding: 8px; border-radius: 4px; margin: 5px 0; }\n" +
                 "        .status.good { background: #d4edda; color: #155724; }\n" +
@@ -446,6 +516,11 @@ public class WebServer extends NanoHTTPD {
                 "    </style>\n" +
                 "</head>\n" +
                 "<body>\n" +
+                "    <div id=\"top-status-bar\" class=\"status-bar success\">\n" +
+                "        <div class=\"spinner\" id=\"status-spinner\"></div>\n" +
+                "        <span id=\"status-text\">System Ready</span>\n" +
+                "    </div>\n" +
+                "\n" +
                 "    <h1>🔧 ADB Auto-Enable Configuration</h1>\n" +
                 "    \n" +
                 "    <div class=\"card\">\n" +
@@ -472,8 +547,8 @@ public class WebServer extends NanoHTTPD {
                 "                <div class=\"status-value\" id=\"last-status\">Loading...</div>\n" +
                 "            </div>\n" +
                 "            <div class=\"status-row\">\n" +
-                "                <div class=\"status-label\">Last Port:</div>\n" +
-                "                <div class=\"status-value\" id=\"last-port\">Loading...</div>\n" +
+                "                <div class=\"status-label\">Current Port:</div>\n" +
+                "                <div class=\"status-value\" id=\"current-port\">Loading...</div>\n" +
                 "            </div>\n" +
                 "        </div>\n" +
                 "        <button onclick=\"refreshStatus()\">🔄 Refresh Status</button>\n" +
@@ -503,6 +578,20 @@ public class WebServer extends NanoHTTPD {
                 "        <button onclick=\"resetPairing()\" class=\"danger\">🔄 Reset Pairing</button>\n" +
                 "        <div id=\"reset-success\" class=\"success\"></div>\n" +
                 "        <div id=\"reset-error\" class=\"error\"></div>\n" +
+                "    </div>\n" +
+                "    \n" +
+                "    <div class=\"card\" id=\"port-config-card\">\n" +
+                "        <h2>⚙️ Target Port Configuration</h2>\n" +
+                "        <div class=\"instruction\">\n" +
+                "            Configure the target TCP port and switch immediately:\n" +
+                "        </div>\n" +
+                "        <div>\n" +
+                "            <input type=\"number\" id=\"target-port-input\" placeholder=\"Target Port\" />\n" +
+                "            <button onclick=\"saveTargetPort()\" class=\"secondary\">💾 Save Port</button>\n" +
+                "            <button onclick=\"saveAndSwitchPort()\" class=\"warning\">💾 Save & Switch</button>\n" +
+                "        </div>\n" +
+                "        <div id=\"port-success\" class=\"success\"></div>\n" +
+                "        <div id=\"port-error\" class=\"error\"></div>\n" +
                 "    </div>\n" +
                 "    \n" +
                 "    <div class=\"card\" id=\"switch-card\">\n" +
@@ -536,6 +625,24 @@ public class WebServer extends NanoHTTPD {
                 "        let autoRefreshPaused = false;\n" +
                 "        let logsRefreshInterval;\n" +
                 "        \n" +
+                "        function showActivity(text) {\n" +
+                "            const bar = document.getElementById('top-status-bar');\n" +
+                "            const spinner = document.getElementById('status-spinner');\n" +
+                "            const textEl = document.getElementById('status-text');\n" +
+                "            bar.className = 'status-bar';\n" +
+                "            spinner.style.display = 'block';\n" +
+                "            textEl.textContent = text;\n" +
+                "        }\n" +
+                "        \n" +
+                "        function showResult(text, isSuccess) {\n" +
+                "            const bar = document.getElementById('top-status-bar');\n" +
+                "            const spinner = document.getElementById('status-spinner');\n" +
+                "            const textEl = document.getElementById('status-text');\n" +
+                "            bar.className = 'status-bar ' + (isSuccess ? 'success' : 'error');\n" +
+                "            spinner.style.display = 'none';\n" +
+                "            textEl.textContent = text;\n" +
+                "        }\n" +
+                "        \n" +
                 "        function refreshStatus() {\n" +
                 "            fetch('/api/status')\n" +
                 "                .then(r => r.json())\n" +
@@ -550,7 +657,12 @@ public class WebServer extends NanoHTTPD {
                 "                        '<span class=\"status good\">✓ Available</span>' : \n" +
                 "                        '<span class=\"status bad\">✗ Not available</span>';\n" +
                 "                    document.getElementById('last-status').textContent = data.lastStatus;\n" +
-                "                    document.getElementById('last-port').textContent = data.lastPort;\n" +
+                "                    document.getElementById('current-port').textContent = (data.currentPort === -1) ? 'NONE' : data.currentPort;\n" +
+                "                    \n" +
+                "                    const portInput = document.getElementById('target-port-input');\n" +
+                "                    if (document.activeElement !== portInput) {\n" +
+                "                        portInput.value = data.targetPort;\n" +
+                "                    }\n" +
                 "                    \n" +
                 "                    if (data.isPaired) {\n" +
                 "                        document.getElementById('pairing-card').style.display = 'none';\n" +
@@ -566,6 +678,79 @@ public class WebServer extends NanoHTTPD {
                 "                        document.getElementById('switch-card').style.display = 'block';\n" +
                 "                    }\n" +
                 "                });\n" +
+                "        }\n" +
+                "        \n" +
+                "        function saveTargetPort() {\n" +
+                "            const port = document.getElementById('target-port-input').value;\n" +
+                "            const successDiv = document.getElementById('port-success');\n" +
+                "            const errorDiv = document.getElementById('port-error');\n" +
+                "            \n" +
+                "            successDiv.style.display = 'none';\n" +
+                "            errorDiv.style.display = 'none';\n" +
+                "            showActivity('Saving target port...');\n" +
+                "            \n" +
+                "            fetch('/api/port', {\n" +
+                "                method: 'POST',\n" +
+                "                headers: {'Content-Type': 'application/x-www-form-urlencoded'},\n" +
+                "                body: 'port=' + port\n" +
+                "            })\n" +
+                "            .then(r => r.json())\n" +
+                "            .then(data => {\n" +
+                "                if (data.success) {\n" +
+                "                    successDiv.textContent = data.message;\n" +
+                "                    successDiv.style.display = 'block';\n" +
+                "                    showResult(data.message, true);\n" +
+                "                    setTimeout(() => { successDiv.style.display = 'none'; }, 3000);\n" +
+                "                    refreshStatus();\n" +
+                "                } else {\n" +
+                "                    errorDiv.textContent = data.error || 'Failed to update port';\n" +
+                "                    errorDiv.style.display = 'block';\n" +
+                "                    showResult(data.error || 'Failed to update port', false);\n" +
+                "                }\n" +
+                "            })\n" +
+                "            .catch(e => {\n" +
+                "                errorDiv.textContent = 'Error: ' + e.message;\n" +
+                "                errorDiv.style.display = 'block';\n" +
+                "                showResult('Error: ' + e.message, false);\n" +
+                "            });\n" +
+                "        }\n" +
+                "        \n" +
+                "        function saveAndSwitchPort() {\n" +
+                "            const port = document.getElementById('target-port-input').value;\n" +
+                "            const successDiv = document.getElementById('port-success');\n" +
+                "            const errorDiv = document.getElementById('port-error');\n" +
+                "            \n" +
+                "            successDiv.style.display = 'none';\n" +
+                "            errorDiv.style.display = 'none';\n" +
+                "            showActivity('Saving port and switching...');\n" +
+                "            \n" +
+                "            fetch('/api/port', {\n" +
+                "                method: 'POST',\n" +
+                "                headers: {'Content-Type': 'application/x-www-form-urlencoded'},\n" +
+                "                body: 'port=' + port\n" +
+                "            })\n" +
+                "            .then(r => r.json())\n" +
+                "            .then(data => {\n" +
+                "                if (data.success) {\n" +
+                "                    return fetch('/api/switch');\n" +
+                "                } else {\n" +
+                "                    throw new Error(data.error || 'Failed to update port');\n" +
+                "                }\n" +
+                "            })\n" +
+                "            .then(r => r.json())\n" +
+                "            .then(data => {\n" +
+                "                successDiv.textContent = 'Port saved and switch initiated! Check logs below.';\n" +
+                "                successDiv.style.display = 'block';\n" +
+                "                showResult('Port saved and switch initiated successfully!', true);\n" +
+                "                setTimeout(() => { successDiv.style.display = 'none'; }, 4000);\n" +
+                "                refreshStatus();\n" +
+                "                refreshLogs();\n" +
+                "            })\n" +
+                "            .catch(e => {\n" +
+                "                errorDiv.textContent = 'Error: ' + e.message;\n" +
+                "                errorDiv.style.display = 'block';\n" +
+                "                showResult('Error: ' + e.message, false);\n" +
+                "            });\n" +
                 "        }\n" +
                 "        \n" +
                 "        function refreshLogs() {\n" +
@@ -618,6 +803,7 @@ public class WebServer extends NanoHTTPD {
                 "            const errorDiv = document.getElementById('reset-error');\n" +
                 "            \n" +
                 "            if (confirm('Are you sure you want to reset pairing? You will need to pair again.')) {\n" +
+                "                showActivity('Resetting pairing credentials...');\n" +
                 "                fetch('/api/reset', {\n" +
                 "                    method: 'POST'\n" +
                 "                })\n" +
@@ -627,6 +813,7 @@ public class WebServer extends NanoHTTPD {
                 "                        successDiv.textContent = data.message;\n" +
                 "                        successDiv.style.display = 'block';\n" +
                 "                        errorDiv.style.display = 'none';\n" +
+                "                        showResult(data.message, true);\n" +
                 "                        setTimeout(() => {\n" +
                 "                            successDiv.style.display = 'none';\n" +
                 "                            refreshStatus();\n" +
@@ -635,12 +822,14 @@ public class WebServer extends NanoHTTPD {
                 "                        errorDiv.textContent = 'Reset failed: ' + (data.error || 'Unknown error');\n" +
                 "                        errorDiv.style.display = 'block';\n" +
                 "                        successDiv.style.display = 'none';\n" +
+                "                        showResult('Reset failed', false);\n" +
                 "                    }\n" +
                 "                })\n" +
                 "                .catch(e => {\n" +
                 "                    errorDiv.textContent = 'Error: ' + e.message;\n" +
                 "                    errorDiv.style.display = 'block';\n" +
                 "                    successDiv.style.display = 'none';\n" +
+                "                    showResult('Error: ' + e.message, false);\n" +
                 "                });\n" +
                 "            }\n" +
                 "        }\n" +
@@ -653,6 +842,7 @@ public class WebServer extends NanoHTTPD {
                 "            \n" +
                 "            successDiv.style.display = 'none';\n" +
                 "            errorDiv.style.display = 'none';\n" +
+                "            showActivity('Pairing device and requesting self-grant permissions...');\n" +
                 "            \n" +
                 "            fetch('/api/pair', {\n" +
                 "                method: 'POST',\n" +
@@ -664,46 +854,59 @@ public class WebServer extends NanoHTTPD {
                 "                if (data.success) {\n" +
                 "                    successDiv.textContent = data.message;\n" +
                 "                    successDiv.style.display = 'block';\n" +
+                "                    showResult(data.message, true);\n" +
                 "                    setTimeout(refreshStatus, 2000);\n" +
                 "                } else {\n" +
                 "                    errorDiv.textContent = data.error || 'Pairing failed';\n" +
                 "                    errorDiv.style.display = 'block';\n" +
+                "                    showResult(data.error || 'Pairing failed', false);\n" +
                 "                }\n" +
                 "            })\n" +
                 "            .catch(e => {\n" +
                 "                errorDiv.textContent = 'Error: ' + e.message;\n" +
                 "                errorDiv.style.display = 'block';\n" +
+                "                showResult('Error: ' + e.message, false);\n" +
                 "            });\n" +
                 "        }\n" +
                 "        \n" +
                 "        function switchPort() {\n" +
                 "            const infoDiv = document.getElementById('switch-info');\n" +
+                "            showActivity('Switching ADB target port...');\n" +
                 "            \n" +
                 "            fetch('/api/switch')\n" +
                 "                .then(r => r.json())\n" +
                 "                .then(data => {\n" +
                 "                    infoDiv.textContent = data.message;\n" +
                 "                    infoDiv.style.display = 'block';\n" +
+                "                    showResult('Port switch initiated successfully!', true);\n" +
                 "                    setTimeout(() => {\n" +
                 "                        infoDiv.style.display = 'none';\n" +
                 "                        refreshStatus();\n" +
                 "                        refreshLogs();\n" +
                 "                    }, 5000);\n" +
+                "                })\n" +
+                "                .catch(e => {\n" +
+                "                    showResult('Switch failed: ' + e.message, false);\n" +
                 "                });\n" +
                 "        }\n" +
                 "        \n" +
                 "        function runTest() {\n" +
                 "            const infoDiv = document.getElementById('test-info');\n" +
+                "            showActivity('Running boot configuration test...');\n" +
                 "            \n" +
                 "            fetch('/api/test')\n" +
                 "                .then(r => r.json())\n" +
                 "                .then(data => {\n" +
                 "                    infoDiv.textContent = data.message;\n" +
                 "                    infoDiv.style.display = 'block';\n" +
+                "                    showResult('Test sequence started successfully!', true);\n" +
                 "                    setTimeout(() => {\n" +
                 "                        infoDiv.style.display = 'none';\n" +
                 "                        refreshLogs();\n" +
                 "                    }, 3000);\n" +
+                "                })\n" +
+                "                .catch(e => {\n" +
+                "                    showResult('Test failed: ' + e.message, false);\n" +
                 "                });\n" +
                 "        }\n" +
                 "        \n" +
