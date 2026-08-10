@@ -11,6 +11,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.HashMap;
 import java.util.List;
@@ -22,11 +23,13 @@ import java.util.concurrent.TimeUnit;
 public class WebServer extends NanoHTTPD {
     private static final String TAG = "ADBAutoEnable";
     private static final String PREFS_NAME = "ADBAutoEnablePrefs";
+    private static final String KEY_TARGET_PORT = "target_port";
     private static final String SERVICE_TYPE = "_adb-tls-connect._tcp";
 
     private final Context context;
     private final AdbHelper adbHelper;
     private Boolean permissionCached = null;
+
     public WebServer(Context context, int port) {
         super(port);
         this.context = context;
@@ -126,17 +129,14 @@ public class WebServer extends NanoHTTPD {
         }
     }
 
-
-
     private Response handleStatus() {
-        Log.d(TAG, "handleStatus() called - creating socket for port check");
+        Log.d(TAG, "handleStatus() called - checking target port");
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         String lastStatus = prefs.getString("last_status", "Not run yet");
         int lastPort = prefs.getInt("last_port", -1);
         boolean isPaired = prefs.getBoolean("is_paired", false);
 
-        Log.d(TAG, "handleStatus() - calling checkPort5555()");
-        boolean adb5555Available = checkPort5555();
+        boolean adbTargetAvailable = checkTargetPortAvailable();
 
         // Cache permission check - only do it once
         if (permissionCached == null) {
@@ -153,13 +153,11 @@ public class WebServer extends NanoHTTPD {
 
         String json = String.format(Locale.US,
                 "{\"lastStatus\":\"%s\",\"lastPort\":%d,\"isPaired\":%b,\"hasPermission\":%b,\"adb5555Available\":%b}",
-                lastStatus, lastPort, isPaired, permissionCached, adb5555Available
+                lastStatus, lastPort, isPaired, permissionCached, adbTargetAvailable
         );
         Log.d(TAG, "handleStatus() completed");
         return newFixedLengthResponse(Response.Status.OK, "application/json", json);
     }
-
-
 
     private Response handleLogs() {
         Process process = null;
@@ -167,7 +165,6 @@ public class WebServer extends NanoHTTPD {
             process = Runtime.getRuntime().exec(new String[]{"logcat", "-d", "-s", "ADBAutoEnable:*"});
 
             StringBuilder logs = new StringBuilder();
-            // Use try-with-resources for BOTH InputStreamReader and BufferedReader
             try (InputStreamReader isr = new InputStreamReader(process.getInputStream());
                  BufferedReader reader = new BufferedReader(isr)) {
 
@@ -175,9 +172,8 @@ public class WebServer extends NanoHTTPD {
                 while ((line = reader.readLine()) != null) {
                     logs.append(line).append("\n");
                 }
-            } // Readers automatically closed here
+            }
 
-            // Wait for process to complete
             process.waitFor();
 
             String logsText = logs.toString();
@@ -191,7 +187,6 @@ public class WebServer extends NanoHTTPD {
                     .replace("\r", "\\r")
                     .replace("\t", "\\t");
 
-
             return newFixedLengthResponse(Response.Status.OK, "application/json",
                     "{\"logs\":\"" + logsText + "\"}");
         } catch (Exception e) {
@@ -204,8 +199,6 @@ public class WebServer extends NanoHTTPD {
             }
         }
     }
-
-
 
     private Response handleReset() {
         try {
@@ -239,10 +232,22 @@ public class WebServer extends NanoHTTPD {
         }
     }
 
-    private boolean checkPort5555() {
-        try {
-            Socket socket = new Socket("127.0.0.1", 5555);
-            socket.close();
+    private boolean checkTargetPortAvailable() {
+        String deviceIP = getDeviceIP();
+        int targetPort = getTargetPort();
+
+        // Check device IP first (fixes Chromecast/TV devices that don't expose loopback)
+        if (!deviceIP.equals("127.0.0.1") && checkSocket(deviceIP, targetPort)) {
+            return true;
+        }
+
+        // Fallback to loopback
+        return checkSocket("127.0.0.1", targetPort);
+    }
+
+    private boolean checkSocket(String host, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 300);
             return true;
         } catch (Exception e) {
             return false;
@@ -270,13 +275,22 @@ public class WebServer extends NanoHTTPD {
                     return;
                 }
 
-                Log.i(TAG, "Web API: Found ADB on port " + port + ", switching to 5555...");
-                boolean success = adbHelper.switchToPort5555("127.0.0.1", port);  // Use localhost for port 5555
+                String deviceIP = getDeviceIP();
+                int targetPort = getTargetPort();
+
+                Log.i(TAG, "Web API: Found ADB on port " + port + ", switching to target port " + targetPort + "...");
+
+                // Try live device IP first, fall back to loopback
+                boolean success = adbHelper.switchToPort(deviceIP, port, targetPort);
+                if (!success && !deviceIP.equals("127.0.0.1")) {
+                    Log.i(TAG, "Web API: Switch failed via " + deviceIP + ", retrying via loopback (127.0.0.1)...");
+                    success = adbHelper.switchToPort("127.0.0.1", port, targetPort);
+                }
 
                 if (success) {
-                    Log.i(TAG, "Web API: Successfully switched to port 5555");
+                    Log.i(TAG, "Web API: Successfully switched to port " + targetPort);
                 } else {
-                    Log.e(TAG, "Web API: Failed to switch to port 5555");
+                    Log.e(TAG, "Web API: Failed to switch to port " + targetPort);
                 }
 
             } catch (Exception e) {
@@ -289,6 +303,10 @@ public class WebServer extends NanoHTTPD {
                 "{\"success\":true,\"message\":\"Port switch started. Check logs below for status.\"}");
     }
 
+    private int getTargetPort() {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getInt(KEY_TARGET_PORT, 5555);
+    }
 
     private int discoverAdbPort() {
         final int[] discoveredPort = {-1};
@@ -303,13 +321,11 @@ public class WebServer extends NanoHTTPD {
             return -1;
         }
 
-
         NsdManager.DiscoveryListener discoveryListener = new NsdManager.DiscoveryListener() {
             @Override
             public void onDiscoveryStarted(String serviceType) {
                 Log.i(TAG, "mDNS discovery started for " + serviceType);
             }
-
 
             @Override
             @SuppressWarnings("deprecation")
@@ -339,14 +355,12 @@ public class WebServer extends NanoHTTPD {
                                 if (host.equals(deviceIP)) {
                                     Log.i(TAG, "Found matching device with IP: " + deviceIP + ", Port: " + port);
                                     discoveredPort[0] = port;
-                                    // DON'T countdown - let timeout handle it to get the latest port
                                 } else {
                                     Log.w(TAG, "Skipping device with IP " + host + " (looking for " + deviceIP + ")");
                                 }
                             }
                         }
                     }
-
                 });
             }
 
@@ -371,7 +385,6 @@ public class WebServer extends NanoHTTPD {
                 Log.e(TAG, "Discovery stop failed: error " + errorCode);
             }
         };
-
 
         try {
             nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
@@ -447,7 +460,7 @@ public class WebServer extends NanoHTTPD {
                 "                <div class=\"status-value\" id=\"pairing-status\">Loading...</div>\n" +
                 "            </div>\n" +
                 "            <div class=\"status-row\">\n" +
-                "                <div class=\"status-label\">ADB Port 5555:</div>\n" +
+                "                <div class=\"status-label\">ADB Target Port:</div>\n" +
                 "                <div class=\"status-value\" id=\"port-status\">Loading...</div>\n" +
                 "            </div>\n" +
                 "            <div class=\"status-row\">\n" +
@@ -493,11 +506,11 @@ public class WebServer extends NanoHTTPD {
                 "    </div>\n" +
                 "    \n" +
                 "    <div class=\"card\" id=\"switch-card\">\n" +
-                "        <h2>🔄 Switch to Port 5555</h2>\n" +
+                "        <h2>🔄 Switch Target Port</h2>\n" +
                 "        <div class=\"instruction\">\n" +
-                "            After pairing and enabling wireless debugging, switch ADB to port 5555:\n" +
+                "            After pairing and enabling wireless debugging, switch ADB to your target port:\n" +
                 "        </div>\n" +
-                "        <button onclick=\"switchPort()\">🔀 Switch to Port 5555 Now</button>\n" +
+                "        <button onclick=\"switchPort()\">🔀 Switch Target Port Now</button>\n" +
                 "        <div id=\"switch-info\" class=\"info\"></div>\n" +
                 "    </div>\n" +
                 "    \n" +
@@ -539,7 +552,6 @@ public class WebServer extends NanoHTTPD {
                 "                    document.getElementById('last-status').textContent = data.lastStatus;\n" +
                 "                    document.getElementById('last-port').textContent = data.lastPort;\n" +
                 "                    \n" +
-                "                    // Show/hide pairing cards based on status\n" +
                 "                    if (data.isPaired) {\n" +
                 "                        document.getElementById('pairing-card').style.display = 'none';\n" +
                 "                        document.getElementById('paired-card').style.display = 'block';\n" +
@@ -548,7 +560,6 @@ public class WebServer extends NanoHTTPD {
                 "                        document.getElementById('paired-card').style.display = 'none';\n" +
                 "                    }\n" +
                 "                    \n" +
-                "                    // Show/hide switch card based on port 5555 availability\n" +
                 "                    if (data.adb5555Available) {\n" +
                 "                        document.getElementById('switch-card').style.display = 'none';\n" +
                 "                    } else {\n" +
@@ -576,7 +587,6 @@ public class WebServer extends NanoHTTPD {
                 "        function copyLogs() {\n" +
                 "            const logs = document.getElementById('logs-container').textContent;\n" +
                 "            \n" +
-                "            // Try modern Clipboard API first (secure contexts only)\n" +
                 "            if (navigator.clipboard && navigator.clipboard.writeText) {\n" +
                 "                navigator.clipboard.writeText(logs).then(() => {\n" +
                 "                    const btn = event.target;\n" +
@@ -584,11 +594,9 @@ public class WebServer extends NanoHTTPD {
                 "                    btn.textContent = '✓ Copied!';\n" +
                 "                    setTimeout(() => { btn.textContent = originalText; }, 2000);\n" +
                 "                }).catch(e => {\n" +
-                "                    console.log('Clipboard API failed, using fallback method');\n" +
                 "                    copyLogsViaTextarea(logs, event.target);\n" +
                 "                });\n" +
                 "            } else {\n" +
-                "                // Fallback for non-secure contexts\n" +
                 "                copyLogsViaTextarea(logs, event.target);\n" +
                 "            }\n" +
                 "        }\n" +
@@ -699,7 +707,6 @@ public class WebServer extends NanoHTTPD {
                 "                });\n" +
                 "        }\n" +
                 "        \n" +
-                "        // Pause auto-refresh when user selects text in logs\n" +
                 "        document.addEventListener('DOMContentLoaded', function() {\n" +
                 "            const logsContainer = document.getElementById('logs-container');\n" +
                 "            const pausedIndicator = document.getElementById('paused-indicator');\n" +
@@ -731,11 +738,9 @@ public class WebServer extends NanoHTTPD {
                 "            }\n" +
                 "        }\n" +
                 "        \n" +
-                "        // Initial load\n" +
                 "        refreshStatus();\n" +
                 "        refreshLogs();\n" +
                 "        \n" +
-                "        // Auto-refresh\n" +
                 "        setInterval(refreshStatus, 5000);\n" +
                 "        startLogsAutoRefresh();\n" +
                 "    </script>\n" +
