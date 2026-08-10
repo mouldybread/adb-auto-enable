@@ -16,8 +16,13 @@ import android.util.Log;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class AdbConfigService extends Service {
     private static final String TAG = "ADBAutoEnable";
@@ -399,34 +404,54 @@ public class AdbConfigService extends Service {
     }
 
     private int scanForAdbPort() {
-        Log.i(TAG, "Starting optimized port scan...");
+        Log.i(TAG, "Starting full ephemeral port scan (32768-60999)...");
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         int lastPort = prefs.getInt(KEY_LAST_PORT, -1);
-        String deviceIP = getDeviceIP();
-
-        Log.i(TAG, "Scanning with device IP: " + deviceIP);
 
         AdbHelper adbHelper = new AdbHelper(this);
 
-        if (lastPort > 0 && adbHelper.connect(deviceIP, lastPort)) {
+        // Fast path: Check cached last known port
+        if (lastPort > 0 && adbHelper.connect("127.0.0.1", lastPort)) {
             Log.i(TAG, "Found ADB on previously used port: " + lastPort);
             return lastPort;
         }
 
-        int[] commonBases = {37000, 38000, 39000, 40000, 41000, 42000, 35000, 36000, 43000, 44000};
-        for (int base : commonBases) {
-            Log.i(TAG, "Checking range " + base + "-" + (base + 999) + "...");
-            updateNotification("Scanning ports " + base + "...");
+        final int MIN_PORT = 32768;
+        final int MAX_PORT = 60999;
+        final int THREAD_COUNT = 64;
+        final int TIMEOUT_MS = 50;
 
-            for (int offset = 0; offset < 1000; offset += 5) {
-                int port = base + offset;
-                if (adbHelper.connect(deviceIP, port)) {
-                    Log.i(TAG, "Found ADB on port: " + port);
-                    return port;
+        final AtomicInteger foundPort = new AtomicInteger(-1);
+        ExecutorService executor = Executors.newFixedThreadPool(THREAD_COUNT);
+
+        for (int port = MIN_PORT; port <= MAX_PORT; port++) {
+            final int currentPort = port;
+            executor.submit(() -> {
+                if (foundPort.get() != -1) return; // Stop probing if already found
+
+                try (Socket socket = new Socket()) {
+                    socket.connect(new InetSocketAddress("127.0.0.1", currentPort), TIMEOUT_MS);
+
+                    // Fast socket hit found; verify ADB handshake
+                    if (adbHelper.connect("127.0.0.1", currentPort)) {
+                        if (foundPort.compareAndSet(-1, currentPort)) {
+                            Log.i(TAG, "Full scan found ADB on port: " + currentPort);
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // Closed port (RST) or timeout
                 }
-            }
+            });
         }
-        return -1;
+
+        executor.shutdown();
+        try {
+            executor.awaitTermination(15, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Log.e(TAG, "Port scan interrupted", e);
+        }
+
+        return foundPort.get();
     }
 
     private String getDeviceIP() {
