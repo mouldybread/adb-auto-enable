@@ -58,7 +58,8 @@ public class NetworkUtils {
     }
 
     /**
-     * Checks whether the device has an active Wi-Fi or Ethernet connection.
+     * Checks whether the device has an active Wi-Fi, Ethernet, or VPN connection.
+     * Excludes raw cellular data to keep the service bound to LAN/VPN environments.
      * Safe for API level 21+.
      */
     public static boolean isNetworkConnected(Context context) {
@@ -71,7 +72,8 @@ public class NetworkUtils {
                 NetworkCapabilities capabilities = cm.getNetworkCapabilities(network);
                 return capabilities != null &&
                         (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) &&
+                                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) &&
                         capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
             }
             return false;

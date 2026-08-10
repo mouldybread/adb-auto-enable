@@ -334,7 +334,8 @@ public class WebServer extends NanoHTTPD {
                             int port = serviceInfo.getPort();
                             Log.i(TAG, "Host: " + host + ", Port: " + port);
                             if (host.startsWith("127.") || host.equals("::1") ||
-                                    host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) {
+                                    host.startsWith("192.168.") || host.startsWith("10.") ||
+                                    host.startsWith("172.") || host.startsWith("100.")) {
                                 if (host.equals(deviceIP)) {
                                     Log.i(TAG, "Found matching device with IP: " + deviceIP + ", Port: " + port);
                                     discoveredPort[0] = port;
