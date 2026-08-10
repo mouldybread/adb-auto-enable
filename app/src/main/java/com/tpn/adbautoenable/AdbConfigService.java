@@ -26,6 +26,7 @@ public class AdbConfigService extends Service {
     private static final String PREFS_NAME = "ADBAutoEnablePrefs";
     private static final String KEY_LAST_STATUS = "last_status";
     private static final String KEY_LAST_PORT = "last_port";
+    private static final String KEY_TARGET_PORT = "target_port";
     private static final int INITIAL_BOOT_DELAY_SECONDS = 30;
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final int RETRY_DELAY_SECONDS = 10;
@@ -257,20 +258,21 @@ public class AdbConfigService extends Service {
             Log.i(TAG, "Found ADB on port " + port);
             saveLastPort(port);
 
-            Log.i(TAG, "Step 4: Switching to port 5555...");
-            updateNotification("Switching to port 5555...");
-            updateStatus("Switching to port 5555...");
+            int targetPort = getTargetPort();
+            Log.i(TAG, "Step 4: Switching to port " + targetPort + "...");
+            updateNotification("Switching to port " + targetPort + "...");
+            updateStatus("Switching to port " + targetPort + "...");
 
             AdbHelper adbHelper = new AdbHelper(this);
-            boolean success = adbHelper.switchToPort5555("127.0.0.1", port);  // Use localhost
+            boolean success = adbHelper.switchToPort("127.0.0.1", port, targetPort);  // Use localhost and dynamic target port
 
             if (success) {
-                Log.i(TAG, "Successfully configured ADB on port 5555!");
-                updateStatus("Success - ADB on port 5555");
-                updateNotification("Success - ADB on port 5555");
+                Log.i(TAG, "Successfully configured ADB on port " + targetPort + "!");
+                updateStatus("Success - ADB on port " + targetPort);
+                updateNotification("Success - ADB on port " + targetPort);
                 return true;
             } else {
-                Log.e(TAG, "Failed to switch to port 5555");
+                Log.e(TAG, "Failed to switch to port " + targetPort);
                 updateStatus("Failed - could not switch port");
                 updateNotification("Failed - could not switch port");
                 return false;
@@ -429,6 +431,11 @@ public class AdbConfigService extends Service {
 
     private String getDeviceIP() {
         return NetworkUtils.getLiveDeviceIP(this);
+    }
+
+    private int getTargetPort() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getInt(KEY_TARGET_PORT, 5555);
     }
 
     private void updateStatus(String status) {

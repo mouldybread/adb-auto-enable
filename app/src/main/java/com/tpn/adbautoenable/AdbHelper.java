@@ -3,7 +3,6 @@ package com.tpn.adbautoenable;
 import android.content.Context;
 import android.os.Build;
 import android.util.Log;
-
 import io.github.muntashirakon.adb.AbsAdbConnectionManager;
 import io.github.muntashirakon.adb.AdbStream;
 import androidx.annotation.NonNull;
@@ -15,9 +14,7 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
-
 import org.conscrypt.Conscrypt;
-
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -128,52 +125,67 @@ public class AdbHelper {
         }
     }
 
-    public boolean switchToPort5555(String host, int port) {
+    /**
+     * Switches ADB from its current port to a target TCP port.
+     *
+     * @param host       The host address (e.g. "127.0.0.1")
+     * @param port       The currently active ADB port (e.g. mDNS paired port)
+     * @param targetPort The desired target port (e.g. 5555, 65432, etc.)
+     * @return true if command was sent successfully
+     */
+    public boolean switchToPort(String host, int port, int targetPort) {
         SimpleAdbManager manager = null;
         try {
-            Log.i(TAG, "switchToPort5555: Starting with host=" + host + ", port=" + port);
+            Log.i(TAG, "switchToPort: Starting with host=" + host + ", port=" + port + ", targetPort=" + targetPort);
             manager = new SimpleAdbManager(context);
 
-            Log.i(TAG, "switchToPort5555: Calling connect(" + host + ":" + port + ")");
+            Log.i(TAG, "switchToPort: Calling connect(" + host + ":" + port + ")");
             manager.connect(host, port);
-            Log.i(TAG, "switchToPort5555: connect() completed successfully");
+            Log.i(TAG, "switchToPort: connect() completed successfully");
 
-            Log.i(TAG, "switchToPort5555: Waiting for connection to stabilize");
+            Log.i(TAG, "switchToPort: Waiting for connection to stabilize");
             Thread.sleep(200);
 
-            Log.i(TAG, "switchToPort5555: Sending tcpip:5555 service command");
-            try (AdbStream stream = manager.openStream("tcpip:5555");
+            Log.i(TAG, "switchToPort: Sending tcpip:" + targetPort + " service command");
+            try (AdbStream stream = manager.openStream("tcpip:" + targetPort);
                  InputStream inputStream = stream.openInputStream()) {
 
-                Log.i(TAG, "switchToPort5555: Reading response from stream");
+                Log.i(TAG, "switchToPort: Reading response from stream");
                 byte[] buffer = new byte[1024];
                 int bytesRead = inputStream.read(buffer);
 
                 if (bytesRead > 0) {
                     String response = new String(buffer, 0, bytesRead);
-                    Log.i(TAG, "switchToPort5555: Response received (" + bytesRead + " bytes): " + response);
+                    Log.i(TAG, "switchToPort: Response received (" + bytesRead + " bytes): " + response);
                 } else {
-                    Log.i(TAG, "switchToPort5555: No response data received");
+                    Log.i(TAG, "switchToPort: No response data received");
                 }
             }
 
-            Log.i(TAG, "switchToPort5555: Waiting 3000ms for ADB to restart on port 5555");
+            Log.i(TAG, "switchToPort: Waiting 3000ms for ADB to restart on port " + targetPort);
             Thread.sleep(3000);
 
-            Log.i(TAG, "switchToPort5555: Successfully switched to port 5555");
+            Log.i(TAG, "switchToPort: Successfully switched to port " + targetPort);
             return true;
         } catch (Exception e) {
-            Log.e(TAG, "switchToPort5555: Failed to switch to port 5555", e);
+            Log.e(TAG, "switchToPort: Failed to switch to port " + targetPort, e);
             return false;
         } finally {
             if (manager != null) {
                 try {
                     manager.close();
                 } catch (Exception e) {
-                    Log.e(TAG, "Error closing manager after switchToPort5555", e);
+                    Log.e(TAG, "Error closing manager after switchToPort", e);
                 }
             }
         }
+    }
+
+    /**
+     * Backward-compatible wrapper defaulting to port 5555.
+     */
+    public boolean switchToPort5555(String host, int port) {
+        return switchToPort(host, port, 5555);
     }
 
     private boolean checkPermissionGranted(SimpleAdbManager manager, String permission) {
@@ -308,7 +320,7 @@ public class AdbHelper {
                     publicKeyInfo
             );
 
-            ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
+            ContentSigner signer = new JcaContentSignerBuilder("SHA250withRSA")
                     .build(keyPair.getPrivate());
 
             X509CertificateHolder certHolder = certBuilder.build(signer);
