@@ -78,7 +78,7 @@ cd adb-auto-enable
 adb install app/build/outputs/apk/release/app-release.apk
 ```
 
-### 2. Initial Pairing (No PC Required!)
+### 2. Initial Pairing
 
 1. Open the app on your device or navigate to `http://your-device-ip:9093` in a browser.
 2. On your Android device:
