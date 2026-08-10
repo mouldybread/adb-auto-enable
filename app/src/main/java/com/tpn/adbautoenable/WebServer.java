@@ -6,16 +6,12 @@ import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.provider.Settings;
 import android.util.Log;
-
 import fi.iki.elonen.NanoHTTPD;
-
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.net.Socket;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -164,39 +160,8 @@ public class WebServer extends NanoHTTPD {
     }
 
 
-    private boolean checkPermission() {
-        try {
-            // Just READ, don't write!
-            Settings.Global.getInt(context.getContentResolver(), "adb_wifi_enabled", 0);
-            return true;
-        } catch (SecurityException e) {
-            return false;
-        }
-    }
-
-
-    // Cache the permission check result
-    private Boolean cachedPermissionCheck = null;
-
-    private boolean checkWriteSettingsPermission() {
-        if (cachedPermissionCheck != null) {
-            return cachedPermissionCheck;
-        }
-
-        try {
-            // Just CHECK, don't actually write
-            int current = Settings.Global.getInt(context.getContentResolver(), "adb_wifi_enabled", 0);
-            cachedPermissionCheck = true;  // If we can read, we likely have permission
-            return true;
-        } catch (Exception e) {
-            cachedPermissionCheck = false;
-            return false;
-        }
-    }
-
 
     private Response handleLogs() {
-        Log.d(TAG, "handleLogs() called - spawning logcat process");
         Process process = null;
         try {
             process = Runtime.getRuntime().exec(new String[]{"logcat", "-d", "-s", "ADBAutoEnable:*"});
@@ -226,7 +191,7 @@ public class WebServer extends NanoHTTPD {
                     .replace("\r", "\\r")
                     .replace("\t", "\\t");
 
-            Log.d(TAG, "handleLogs() completed - returning " + logsText.length() + " characters");
+
             return newFixedLengthResponse(Response.Status.OK, "application/json",
                     "{\"logs\":\"" + logsText + "\"}");
         } catch (Exception e) {
@@ -236,7 +201,6 @@ public class WebServer extends NanoHTTPD {
         } finally {
             if (process != null) {
                 process.destroy();
-                Log.d(TAG, "handleLogs() - process destroyed");
             }
         }
     }
@@ -339,7 +303,6 @@ public class WebServer extends NanoHTTPD {
             return -1;
         }
 
-        final NsdManager.DiscoveryListener[] discoveryListenerHolder = new NsdManager.DiscoveryListener[1];
 
         NsdManager.DiscoveryListener discoveryListener = new NsdManager.DiscoveryListener() {
             @Override
@@ -347,7 +310,9 @@ public class WebServer extends NanoHTTPD {
                 Log.i(TAG, "mDNS discovery started for " + serviceType);
             }
 
+
             @Override
+            @SuppressWarnings("deprecation")
             public void onServiceFound(NsdServiceInfo serviceInfo) {
                 Log.i(TAG, "Service found: " + serviceInfo.getServiceName());
                 nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
@@ -406,7 +371,6 @@ public class WebServer extends NanoHTTPD {
             }
         };
 
-        discoveryListenerHolder[0] = discoveryListener;
 
         try {
             nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
@@ -427,26 +391,7 @@ public class WebServer extends NanoHTTPD {
     }
 
     private String getDeviceIP() {
-        try {
-            android.net.wifi.WifiManager wifiManager = (android.net.wifi.WifiManager)
-                    context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wifiManager == null) {
-                return "127.0.0.1";
-            }
-
-            int ipAddress = wifiManager.getConnectionInfo().getIpAddress();
-            byte[] ipBytes = ByteBuffer.allocate(4)
-                    .order(ByteOrder.LITTLE_ENDIAN)
-                    .putInt(ipAddress)
-                    .array();
-
-            InetAddress inetAddress = InetAddress.getByAddress(ipBytes);
-            String result = inetAddress.getHostAddress();
-            return (result != null) ? result : "127.0.0.1";
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to get device IP", e);
-            return "127.0.0.1";
-        }
+        return NetworkUtils.getLiveDeviceIP(context);
     }
 
     private String getHTML() {

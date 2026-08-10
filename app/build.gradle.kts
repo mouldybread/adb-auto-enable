@@ -4,14 +4,14 @@ plugins {
 
 android {
     namespace = "com.tpn.adbautoenable"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.tpn.adbautoenable"
-        minSdk = 21
-        targetSdk = 34
+        minSdk = 26
+        targetSdk = 35
         versionCode = 8
-        versionName = "0.2.7"
+        versionName = "0.2.8"
     }
 
     signingConfigs {
@@ -41,15 +41,10 @@ android {
 }
 
 dependencies {
-    implementation("org.nanohttpd:nanohttpd:2.3.1")
-
-    // libadb-android - Pure Java ADB with pairing support
-    implementation("com.github.MuntashirAkon:libadb-android:1.0.1")
-
-    // Conscrypt for TLS support (required for pairing)
-    implementation("org.conscrypt:conscrypt-android:2.5.2")
-
-    // BouncyCastle for certificate generation
-    implementation("org.bouncycastle:bcprov-jdk15on:1.70")
-    implementation("org.bouncycastle:bcpkix-jdk15on:1.70")
+    implementation(libs.nanohttpd)
+    implementation(libs.libadb)
+    implementation(libs.conscrypt)
+    implementation(libs.bouncycastle.bcprov)
+    implementation(libs.bouncycastle.bcpkix)
+    implementation(libs.androidx.annotation)
 }

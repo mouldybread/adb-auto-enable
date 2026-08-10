@@ -6,7 +6,7 @@ import android.util.Log;
 
 import io.github.muntashirakon.adb.AbsAdbConnectionManager;
 import io.github.muntashirakon.adb.AdbStream;
-
+import androidx.annotation.NonNull;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.cert.X509CertificateHolder;
@@ -48,14 +48,12 @@ public class AdbHelper {
 
         try {
             // Install security providers
-            Log.i(TAG, "Installing security providers");
             Security.insertProviderAt(Conscrypt.newProvider(), 1);
             if (Security.getProvider("BC") == null) {
                 Security.addProvider(new BouncyCastleProvider());
             }
-            Log.i(TAG, "AdbHelper initialized successfully");
+
         } catch (Exception e) {
-            Log.e(TAG, "Failed to initialize security providers", e);
             // Don't throw - providers might work later or may already be initialized
         }
     }
@@ -83,22 +81,12 @@ public class AdbHelper {
     }
 
     public boolean connect(String host, int port) {
-        SimpleAdbManager manager = null;
-        try {
-            manager = new SimpleAdbManager(context);
+        try (SimpleAdbManager manager = new SimpleAdbManager(context)) {
             manager.connect(host, port);
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Connect failed", e);
             return false;
-        } finally {
-            if (manager != null) {
-                try {
-                    manager.close();
-                } catch (Exception e) {
-                    Log.e(TAG, "Error closing manager after connect", e);
-                }
-            }
         }
     }
 
@@ -117,8 +105,12 @@ public class AdbHelper {
             }
 
             String command = "shell:pm grant " + packageName + " " + permission;
-            try (AdbStream stream = manager.openStream(command)) {
-                // Stream automatically closed
+            try (AdbStream stream = manager.openStream(command);
+                 InputStream is = stream.openInputStream()) {
+                byte[] buffer = new byte[1024];
+                while (is.read(buffer) != -1) {
+                    // Drain stream
+                }
             }
             Log.i(TAG, "Successfully granted permission!");
             return true;
@@ -325,16 +317,19 @@ public class AdbHelper {
         }
 
         @Override
+        @NonNull
         protected PrivateKey getPrivateKey() {
             return privateKey;
         }
 
         @Override
+        @NonNull
         protected Certificate getCertificate() {
             return certificate;
         }
 
         @Override
+        @NonNull
         protected String getDeviceName() {
             return "ADBAutoEnable";
         }

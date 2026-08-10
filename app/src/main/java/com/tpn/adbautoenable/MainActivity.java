@@ -1,18 +1,12 @@
 package com.tpn.adbautoenable;
-
 import android.app.Activity;
 import android.content.Intent;
-import android.os.Build;
 import android.os.Bundle;
 import android.widget.TextView;
 import android.widget.LinearLayout;
-import android.net.wifi.WifiManager;
-import android.content.Context;
-import android.text.format.Formatter;
-import android.util.Log;
 
 public class MainActivity extends Activity {
-    private static final String TAG = "ADBAutoEnable";
+
     private static final int WEB_PORT = 9093;
 
     @Override
@@ -22,11 +16,7 @@ public class MainActivity extends Activity {
         // Start the foreground service to keep web server alive
         Intent serviceIntent = new Intent(this, AdbConfigService.class);
         serviceIntent.putExtra("boot_config", false); // Not boot config, just start service
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent);
-        } else {
-            startService(serviceIntent);
-        }
+        startForegroundService(serviceIntent);
 
         // Create UI
         LinearLayout layout = new LinearLayout(this);
@@ -58,8 +48,6 @@ public class MainActivity extends Activity {
     }
 
     private String getLocalIpAddress() {
-        WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-        int ipAddress = wifiManager.getConnectionInfo().getIpAddress();
-        return Formatter.formatIpAddress(ipAddress);
+        return NetworkUtils.getLiveDeviceIP(this);
     }
 }

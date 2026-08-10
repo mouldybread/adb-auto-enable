@@ -7,23 +7,15 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
-import android.net.NetworkInfo;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
-import android.net.wifi.WifiInfo;
-import android.net.wifi.WifiManager;
-import android.os.Build;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.provider.Settings;
 import android.util.Log;
 
 import java.io.IOException;
 import java.net.InetAddress;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -40,7 +32,6 @@ public class AdbConfigService extends Service {
     private static final int WEB_SERVER_PORT = 9093;
 
     private WebServer webServer;
-    private boolean isBootConfigMode = false;
     private volatile boolean isConfiguring = false;
 
     @Override
@@ -61,9 +52,23 @@ public class AdbConfigService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.i(TAG, "AdbConfigService onStartCommand() called");
+        Log.i(TAG, "Intent: " + (intent != null ? intent.toString() : "NULL"));
+        Log.i(TAG, "Flags: " + flags);
 
-        // Check if this is boot configuration or just keeping the service alive
-        isBootConfigMode = intent != null && intent.getBooleanExtra("boot_config", false);
+        if (intent != null) {
+            Bundle extras = intent.getExtras();
+            if (extras != null) {
+                for (String key : extras.keySet()) {
+                    Log.i(TAG, "Extra: " + key + " = " + extras.getString(key));
+                }
+            } else {
+                Log.i(TAG, "Intent has no extras");
+            }
+        }
+
+        // Declared as a local variable
+        boolean isBootConfigMode = intent != null && intent.getBooleanExtra("boot_config", false);
+        Log.i(TAG, "isBootConfigMode: " + isBootConfigMode);
 
         try {
             // Start as foreground service IMMEDIATELY
@@ -107,7 +112,7 @@ public class AdbConfigService extends Service {
             Log.e(TAG, "Error in onStartCommand", e);
         }
 
-        return START_STICKY; // Changed from START_NOT_STICKY to keep service alive
+        return START_STICKY;
     }
 
     @Override
@@ -162,47 +167,7 @@ public class AdbConfigService extends Service {
     }
 
     private boolean isWifiConnected() {
-        try {
-            WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wifiManager == null) {
-                return false;
-            }
-
-            if (!wifiManager.isWifiEnabled()) {
-                return false;
-            }
-
-            WifiInfo wifiInfo = wifiManager.getConnectionInfo();
-            if (wifiInfo == null) {
-                return false;
-            }
-
-            int ipAddress = wifiInfo.getIpAddress();
-            if (ipAddress == 0) {
-                return false;
-            }
-
-            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    Network network = cm.getActiveNetwork();
-                    if (network != null) {
-                        NetworkCapabilities capabilities = cm.getNetworkCapabilities(network);
-                        return capabilities != null &&
-                                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
-                    }
-                } else {
-                    NetworkInfo networkInfo = cm.getActiveNetworkInfo();
-                    return networkInfo != null &&
-                            networkInfo.isConnected() &&
-                            networkInfo.getType() == ConnectivityManager.TYPE_WIFI;
-                }
-            }
-            return false;
-        } catch (Exception e) {
-            Log.e(TAG, "Error checking WiFi status", e);
-            return false;
-        }
+        return NetworkUtils.isNetworkConnected(this);
     }
 
     private void waitForBootStabilization() throws InterruptedException {
@@ -299,7 +264,6 @@ public class AdbConfigService extends Service {
             AdbHelper adbHelper = new AdbHelper(this);
             boolean success = adbHelper.switchToPort5555("127.0.0.1", port);  // Use localhost
 
-
             if (success) {
                 Log.i(TAG, "Successfully configured ADB on port 5555!");
                 updateStatus("Success - ADB on port 5555");
@@ -330,6 +294,7 @@ public class AdbConfigService extends Service {
         }
     }
 
+    @SuppressWarnings("deprecation")
     private int discoverAdbPortViaMdns() {
         final int[] discoveredPort = {-1};
         final CountDownLatch latch = new CountDownLatch(1);
@@ -341,8 +306,6 @@ public class AdbConfigService extends Service {
             Log.e(TAG, "NsdManager not available");
             return -1;
         }
-
-        final NsdManager.DiscoveryListener[] discoveryListenerHolder = new NsdManager.DiscoveryListener[1];
 
         NsdManager.DiscoveryListener discoveryListener = new NsdManager.DiscoveryListener() {
             @Override
@@ -409,19 +372,18 @@ public class AdbConfigService extends Service {
             }
         };
 
-        discoveryListenerHolder[0] = discoveryListener;
-
         try {
             nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
-            // Wait full 10 seconds for discovery to find all updates and get the latest port
+
+            // Wait full 10 seconds for discovery to find all updates and check result
             boolean found = latch.await(10, TimeUnit.SECONDS);
-            Log.i(TAG, "Discovery timeout reached, final port: " + discoveredPort[0]);
+            if (!found) {
+                Log.i(TAG, "mDNS discovery window finished, final port: " + discoveredPort[0]);
+            }
 
             try {
-                if (discoveryListenerHolder[0] != null) {
-                    nsdManager.stopServiceDiscovery(discoveryListenerHolder[0]);
-                    Log.i(TAG, "Discovery stopped, using port: " + discoveredPort[0]);
-                }
+                nsdManager.stopServiceDiscovery(discoveryListener);
+                Log.i(TAG, "Discovery stopped, using port: " + discoveredPort[0]);
             } catch (Exception e) {
                 Log.e(TAG, "Error stopping discovery", e);
             }
@@ -432,7 +394,6 @@ public class AdbConfigService extends Service {
 
         return discoveredPort[0];
     }
-
 
     private int scanForAdbPort() {
         Log.i(TAG, "Starting optimized port scan...");
@@ -466,26 +427,7 @@ public class AdbConfigService extends Service {
     }
 
     private String getDeviceIP() {
-        try {
-            WifiManager wifiManager = (WifiManager)
-                    getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wifiManager == null) {
-                return "127.0.0.1";
-            }
-
-            int ipAddress = wifiManager.getConnectionInfo().getIpAddress();
-            byte[] ipBytes = ByteBuffer.allocate(4)
-                    .order(ByteOrder.LITTLE_ENDIAN)
-                    .putInt(ipAddress)
-                    .array();
-
-            InetAddress inetAddress = InetAddress.getByAddress(ipBytes);
-            String result = inetAddress.getHostAddress();
-            return (result != null) ? result : "127.0.0.1";
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to get device IP", e);
-            return "127.0.0.1";
-        }
+        return NetworkUtils.getLiveDeviceIP(this);
     }
 
     private void updateStatus(String status) {
@@ -499,29 +441,20 @@ public class AdbConfigService extends Service {
     }
 
     private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "ADB Configuration",
-                    NotificationManager.IMPORTANCE_LOW
-            );
-            channel.setDescription("ADB auto-configuration service");
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.createNotificationChannel(channel);
-            }
+        NotificationChannel channel = new NotificationChannel(
+                CHANNEL_ID,
+                "ADB Configuration",
+                NotificationManager.IMPORTANCE_LOW
+        );
+        channel.setDescription("ADB auto-configuration service");
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.createNotificationChannel(channel);
         }
     }
 
     private Notification createNotification(String text) {
-        Notification.Builder builder;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            builder = new Notification.Builder(this, CHANNEL_ID);
-        } else {
-            builder = new Notification.Builder(this);
-        }
-
-        return builder
+        return new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("ADB Auto-Enable")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_menu_preferences)
