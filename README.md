@@ -27,7 +27,7 @@ Used together, Display Launcher and Stream Viewer eliminate the need for ADB ent
 
 ## 🚫 Limitations
 
-- Tested primarily on Chromecast with Google TV (CCwGTV), Android TV, and Samsung Galaxy devices.
+- Tested primarily on Chromecast with Google TV (CCwGTV)
 
 ## ✨ Features
 
