@@ -17,7 +17,6 @@ Developed on a Chromecast with Google TV (CCwGTV), results may vary on other har
 6. **Port Discovery**: Discovers the randomized ADB port using mDNS or a 64-thread parallel socket sweep (`32768–60999`).
 7. **Self-Connection & Switch**: Connects to the local ADB daemon (LAN IP $\rightarrow$ loopback fallback) and sends the `tcpip:<target_port>` command.
 8. **Done!**: ADB is now locked and available on your target port for external connections!
-9. 
 
 > [!WARNING]
 > **SECURITY WARNING:** This application enables Android Debug Bridge (ADB) on your configured port (default 5555), which provides remote access to your device with full system privileges. While ADB connections require RSA key authentication (users must accept the connection on first pairing), **once a computer is authorized, it has permanent unrestricted access** to install applications, access all data, execute shell commands, and take complete control of your device without further prompts. Additionally, the RSA authentication prompt is vulnerable to overlay attacks where malicious apps can trick users into authorizing connections. **This app should ONLY be used on isolated or trusted networks** (such as a home network behind a firewall with no port forwarding) and **NEVER on public WiFi, guest networks, or any network you do not fully control**. Exposing ADB to the internet or untrusted networks can result in complete device compromise if an attacker gains authorization, either through social engineering, overlay attacks, or physical access to previously paired computers. Use this tool only on devices you own and ensure your network is properly secured with a firewall blocking external access.
@@ -73,8 +72,6 @@ Wait about 45–60 seconds (service initialization + 30s system stabilization de
 adb connect your-device-ip:5555
 ```
 
----
-
 ## Troubleshooting
 
 ### Permission Not Granted / Auto-Grant Failed
@@ -115,8 +112,9 @@ The web server runs on port 9093 in a foreground service. If you can't access it
 3. Ensure you are accessing from the same network subnet: `http://device-ip:9093`.
 
 ---
+## Technical Details
 
-##  Project Structure
+###  Project Structure
 
 ```text
 adb-auto-enable/
@@ -131,10 +129,6 @@ adb-auto-enable/
 └── README.md
 ```
 
----
-
-## Technical Details
-
 ### ADB Protocol Implementation
 
 The app implements the native ADB wire protocol:
@@ -144,8 +138,6 @@ The app implements the native ADB wire protocol:
 - **WRITE** commands like `tcpip:<port>` and `pm grant`
 
 Authentication keys are generated locally and stored in `/data/data/com.tpn.adbautoenable/files/`.
-
----
 
 ### Boot Process Flow
 
