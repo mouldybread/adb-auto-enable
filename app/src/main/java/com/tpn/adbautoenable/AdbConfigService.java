@@ -72,7 +72,6 @@ public class AdbConfigService extends Service {
             }
         }
 
-        // Declared as a local variable
         boolean isBootConfigMode = intent != null && intent.getBooleanExtra("boot_config", false);
         Log.i(TAG, "isBootConfigMode: " + isBootConfigMode);
 
@@ -86,7 +85,6 @@ public class AdbConfigService extends Service {
 
             // Only run boot configuration if this is a boot event
             if (isBootConfigMode) {
-                // Prevent duplicate configuration threads
                 if (isConfiguring) {
                     Log.w(TAG, "Configuration already in progress, ignoring duplicate request");
                     return START_STICKY;
@@ -97,6 +95,9 @@ public class AdbConfigService extends Service {
                 // Run configuration in background thread
                 new Thread(() -> {
                     try {
+                        // Step 0: Immediately write adb_wifi_enabled = 1 before any network or sleep delays
+                        enableWirelessDebuggingImmediately();
+
                         // Step 1: Wait for WiFi to be connected
                         waitForWifiConnection();
                         // Step 2: Wait for system to stabilize
@@ -110,7 +111,7 @@ public class AdbConfigService extends Service {
                     } finally {
                         isConfiguring = false;
                     }
-                    // Don't stop service after boot config - keep web server running
+                    // Keep web server running
                     updateNotification("Web server running on port " + WEB_SERVER_PORT);
                 }).start();
             }
@@ -131,10 +132,25 @@ public class AdbConfigService extends Service {
         super.onDestroy();
         Log.i(TAG, "AdbConfigService onDestroy() called");
 
-        // Stop web server when service is destroyed
         if (webServer != null) {
             webServer.stop();
             Log.i(TAG, "Web server stopped");
+        }
+    }
+
+    private void enableWirelessDebuggingImmediately() {
+        try {
+            Log.i(TAG, "Step 0: Immediately enabling wireless debugging setting...");
+            Settings.Global.putInt(
+                    getContentResolver(),
+                    "adb_wifi_enabled",
+                    1
+            );
+            Log.i(TAG, "Wireless debugging setting successfully enabled early");
+        } catch (SecurityException e) {
+            Log.e(TAG, "Early wireless debugging write failed - permission WRITE_SECURE_SETTINGS missing", e);
+        } catch (Exception e) {
+            Log.e(TAG, "Early wireless debugging write unexpected error", e);
         }
     }
 
@@ -196,7 +212,7 @@ public class AdbConfigService extends Service {
             boolean success = configureAdb();
             if (success) {
                 Log.i(TAG, "Configuration successful on attempt " + attempt);
-                return; // Exit immediately on success
+                return;
             }
 
             if (attempt < MAX_RETRY_ATTEMPTS) {
@@ -206,7 +222,7 @@ public class AdbConfigService extends Service {
                     Thread.sleep(RETRY_DELAY_SECONDS * 1000);
                 } catch (InterruptedException e) {
                     Log.e(TAG, "Retry delay interrupted", e);
-                    return; // Exit if interrupted
+                    return;
                 }
             }
         }
@@ -218,10 +234,7 @@ public class AdbConfigService extends Service {
 
     private boolean configureAdb() {
         try {
-            Log.i(TAG, "Step 1: Enabling wireless debugging...");
-            updateNotification("Enabling wireless debugging...");
-            updateStatus("Enabling wireless debugging...");
-
+            // Re-assert wireless debugging setting
             Settings.Global.putInt(
                     getContentResolver(),
                     "adb_wifi_enabled",
@@ -270,7 +283,7 @@ public class AdbConfigService extends Service {
 
             AdbHelper adbHelper = new AdbHelper(this);
 
-            // Try live device IP first (fixes #8 on Chromecast / TV devices)
+            // Connect via active device IP first, fall back to loopback (Fixes #8)
             boolean success = adbHelper.switchToPort(deviceIP, port, targetPort);
             if (!success && !deviceIP.equals("127.0.0.1")) {
                 Log.i(TAG, "Switch failed via " + deviceIP + ", falling back to loopback (127.0.0.1)...");
@@ -354,7 +367,6 @@ public class AdbConfigService extends Service {
                                 if (host.equals(deviceIP)) {
                                     Log.i(TAG, "Found matching device with IP: " + deviceIP + ", Port: " + port);
                                     discoveredPort[0] = port;
-                                    // DON'T countdown - let timeout handle it to get the latest port
                                 } else {
                                     Log.w(TAG, "Skipping device with IP " + host + " (looking for " + deviceIP + ")");
                                 }
@@ -389,7 +401,6 @@ public class AdbConfigService extends Service {
         try {
             nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
 
-            // Wait full 10 seconds for discovery to find all updates and check result
             boolean found = latch.await(10, TimeUnit.SECONDS);
             if (!found) {
                 Log.i(TAG, "mDNS discovery window finished, final port: " + discoveredPort[0]);
@@ -416,7 +427,6 @@ public class AdbConfigService extends Service {
 
         AdbHelper adbHelper = new AdbHelper(this);
 
-        // Fast path: Check cached last known port
         if (lastPort > 0 && adbHelper.connect("127.0.0.1", lastPort)) {
             Log.i(TAG, "Found ADB on previously used port: " + lastPort);
             return lastPort;
@@ -433,19 +443,17 @@ public class AdbConfigService extends Service {
         for (int port = MIN_PORT; port <= MAX_PORT; port++) {
             final int currentPort = port;
             executor.submit(() -> {
-                if (foundPort.get() != -1) return; // Stop probing if already found
+                if (foundPort.get() != -1) return;
 
                 try (Socket socket = new Socket()) {
                     socket.connect(new InetSocketAddress("127.0.0.1", currentPort), TIMEOUT_MS);
 
-                    // Fast socket hit found; verify ADB handshake
                     if (adbHelper.connect("127.0.0.1", currentPort)) {
                         if (foundPort.compareAndSet(-1, currentPort)) {
                             Log.i(TAG, "Full scan found ADB on port: " + currentPort);
                         }
                     }
                 } catch (Exception ignored) {
-                    // Closed port (RST) or timeout
                 }
             });
         }
