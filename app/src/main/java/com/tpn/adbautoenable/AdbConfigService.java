@@ -95,7 +95,7 @@ public class AdbConfigService extends Service {
                 // Run configuration in background thread
                 new Thread(() -> {
                     try {
-                        // Step 0: Immediately write adb_wifi_enabled = 1 before any network or sleep delays
+                        // Step 0: Immediately write settings before any network or sleep delays
                         enableWirelessDebuggingImmediately();
 
                         // Step 1: Wait for WiFi to be connected
@@ -140,17 +140,27 @@ public class AdbConfigService extends Service {
 
     private void enableWirelessDebuggingImmediately() {
         try {
-            Log.i(TAG, "Step 0: Immediately enabling wireless debugging setting...");
+            Log.i(TAG, "Step 0: Immediately enabling wireless debugging & disabling key revocation...");
+
+            // Enable Wireless Debugging
             Settings.Global.putInt(
                     getContentResolver(),
                     "adb_wifi_enabled",
                     1
             );
-            Log.i(TAG, "Wireless debugging setting successfully enabled early");
+
+            // Disable automatic ADB authorization revocation (0 = never expire)
+            Settings.Global.putLong(
+                    getContentResolver(),
+                    "adb_allowed_connection_time",
+                    0L
+            );
+
+            Log.i(TAG, "Wireless debugging and key revocation settings successfully updated early");
         } catch (SecurityException e) {
-            Log.e(TAG, "Early wireless debugging write failed - permission WRITE_SECURE_SETTINGS missing", e);
+            Log.e(TAG, "Early settings write failed - permission WRITE_SECURE_SETTINGS missing", e);
         } catch (Exception e) {
-            Log.e(TAG, "Early wireless debugging write unexpected error", e);
+            Log.e(TAG, "Early settings write unexpected error", e);
         }
     }
 
@@ -234,11 +244,16 @@ public class AdbConfigService extends Service {
 
     private boolean configureAdb() {
         try {
-            // Re-assert wireless debugging setting
+            // Re-assert wireless debugging & auto-revocation settings
             Settings.Global.putInt(
                     getContentResolver(),
                     "adb_wifi_enabled",
                     1
+            );
+            Settings.Global.putLong(
+                    getContentResolver(),
+                    "adb_allowed_connection_time",
+                    0L
             );
 
             Log.i(TAG, "Step 2: Waiting for ADB service to start...");
