@@ -298,11 +298,11 @@ public class AdbConfigService extends Service {
 
             AdbHelper adbHelper = new AdbHelper(this);
 
-            // Connect via active device IP first, fall back to loopback (Fixes #8)
-            boolean success = adbHelper.switchToPort(deviceIP, port, targetPort);
+            // Try loopback first (avoids hangs on some devices), fall back to active device IP (Fixes #8)
+            boolean success = adbHelper.switchToPort("127.0.0.1", port, targetPort);
             if (!success && !deviceIP.equals("127.0.0.1")) {
-                Log.i(TAG, "Switch failed via " + deviceIP + ", falling back to loopback (127.0.0.1)...");
-                success = adbHelper.switchToPort("127.0.0.1", port, targetPort);
+                Log.i(TAG, "Switch failed via loopback, falling back to " + deviceIP + "...");
+                success = adbHelper.switchToPort(deviceIP, port, targetPort);
             }
 
             if (success) {

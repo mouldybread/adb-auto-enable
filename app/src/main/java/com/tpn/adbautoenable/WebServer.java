@@ -346,11 +346,11 @@ public class WebServer extends NanoHTTPD {
 
                 Log.i(TAG, "Web API: Found ADB on port " + port + ", switching to target port " + targetPort + "...");
 
-                // Try live device IP first, fall back to loopback
-                boolean success = adbHelper.switchToPort(deviceIP, port, targetPort);
+                // Try loopback first, fall back to live device IP (Fixes #8)
+                boolean success = adbHelper.switchToPort("127.0.0.1", port, targetPort);
                 if (!success && !deviceIP.equals("127.0.0.1")) {
-                    Log.i(TAG, "Web API: Switch failed via " + deviceIP + ", retrying via loopback (127.0.0.1)...");
-                    success = adbHelper.switchToPort("127.0.0.1", port, targetPort);
+                    Log.i(TAG, "Web API: Switch failed via loopback, retrying via " + deviceIP + "...");
+                    success = adbHelper.switchToPort(deviceIP, port, targetPort);
                 }
 
                 if (success) {

@@ -90,14 +90,14 @@ public class AdbHelper {
     }
 
     public boolean selfGrantPermission(String host, int port, String packageName, String permission) {
-        // Try active host/IP first
-        if (executeSelfGrant(host, port, packageName, permission)) {
+        // Try loopback first
+        if (executeSelfGrant("127.0.0.1", port, packageName, permission)) {
             return true;
         }
-        // Fall back to loopback if different
+        // Fall back to active host/IP if different (Fixes #8)
         if (!host.equals("127.0.0.1")) {
-            Log.i(TAG, "Self-grant failed via " + host + ", retrying via loopback (127.0.0.1)...");
-            return executeSelfGrant("127.0.0.1", port, packageName, permission);
+            Log.i(TAG, "Self-grant failed via loopback, retrying via " + host + "...");
+            return executeSelfGrant(host, port, packageName, permission);
         }
         return false;
     }
