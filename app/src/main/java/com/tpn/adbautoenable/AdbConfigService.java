@@ -82,6 +82,8 @@ public class AdbConfigService extends Service {
             );
             startForeground(1, notification);
             Log.i(TAG, "Started foreground service with notification");
+            // Fix: Ensure wireless debugging is enabled on EVERY service start, not just boot events.
+            enableWirelessDebuggingImmediately();
 
             // Only run boot configuration if this is a boot event
             if (isBootConfigMode) {
@@ -95,9 +97,6 @@ public class AdbConfigService extends Service {
                 // Run configuration in background thread
                 new Thread(() -> {
                     try {
-                        // Step 0: Immediately write settings before any network or sleep delays
-                        enableWirelessDebuggingImmediately();
-
                         // Step 1: Wait for WiFi to be connected
                         waitForWifiConnection();
                         // Step 2: Wait for system to stabilize
