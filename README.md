@@ -15,7 +15,7 @@ Developed on a Chromecast with Google TV (CCwGTV), results may vary on other har
 4. **Early Setting Enforcement**: Instantly writes `adb_wifi_enabled = 1` to `Settings.Global` before any network or sleep delays.
 5. **Stabilization & Network Wait**: Service waits for an active Wi-Fi/Ethernet IP and allows a 30-second system stabilization period.
 6. **Port Discovery**: Discovers the randomized ADB port using mDNS or a 64-thread parallel socket sweep (`32768–60999`).
-7. **Self-Connection & Switch**: Connects to the local ADB daemon (LAN IP $\rightarrow$ loopback fallback) and sends the `tcpip:<target_port>` command.
+7. **Self-Connection & Switch**: Connects to the local ADB daemon (127.0.0.1 loopback -> device LAN IP fallback) and sends the tcpip:<target_port> command.
 8. **Done!**: ADB is now locked and available on your target port for external connections!
 
 > [!WARNING]
@@ -41,6 +41,9 @@ cd adb-auto-enable
 ./gradlew assembleRelease
 adb install app/build/outputs/apk/release/app-release.apk
 ```
+
+> [!IMPORTANT]
+> **First-Time Installation Note:** After installing the APK, you **must open the app on your device once** (via *Settings → Apps → See All Apps → ADB Auto-Enable*) to start the background web server before you can access `http://your-device-ip:9093`.
 
 ### 2. Initial Pairing
 
@@ -155,7 +158,7 @@ Step 2: Wait for system stabilization (30s)
   ↓
 Step 3: Discover randomized ADB port (mDNS → 64-thread socket sweep fallback)
   ↓
-Step 4: Connect to ADB daemon (Device LAN IP → 127.0.0.1 fallback)
+Step 4: Connect to ADB daemon (127.0.0.1 loopback → Device LAN IP fallback)
   ↓
 Send tcpip:<target_port> command
   ↓
