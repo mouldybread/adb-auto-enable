@@ -13,13 +13,17 @@ public class BootReceiver extends BroadcastReceiver {
         String action = intent.getAction();
         Log.i(TAG, "Received broadcast: " + action);
 
-        if (Intent.ACTION_BOOT_COMPLETED.equals(action) ||
-                Intent.ACTION_LOCKED_BOOT_COMPLETED.equals(action)) {
+        // Any of the filtered actions is a chance to run. Arm the persisted job
+        // first: only a BOOT_COMPLETED receiver is exempt from the background
+        // foreground-service start restriction, so the service start below can
+        // be refused, while the job's settings write cannot.
+        BootJobService.schedule(context, 0L);
 
-            Log.i(TAG, "Boot event detected, starting ADB configuration service immediately...");
+        try {
             startServiceNow(context);
-        } else {
-            Log.i(TAG, "Ignoring broadcast: " + action);
+            Log.i(TAG, "Started ADB configuration service for " + action);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not start service for " + action + ", leaving it to the job: " + e);
         }
     }
 

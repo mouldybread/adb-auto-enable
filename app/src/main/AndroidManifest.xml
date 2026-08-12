@@ -40,6 +40,13 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <service
+            android:name=".BootJobService"
+            android:enabled="true"
+            android:exported="false"
+            android:directBootAware="true"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
@@ -48,6 +55,11 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <!-- Exempt from the implicit broadcast restrictions, so they are
+                     extra chances to start on a device that drops the boot ones.
+                     TIME_SET fires when the clock is set at boot. -->
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

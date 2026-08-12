@@ -50,6 +50,10 @@ public class AdbConfigService extends Service {
 
             // Start web server in the service
             startWebServer();
+
+            // Keep the persisted job armed. It is what survives a reboot on a
+            // device that never starts this process for a boot broadcast.
+            BootJobService.schedule(this, 60 * 1000L);
         } catch (Exception e) {
             Log.e(TAG, "Error in onCreate", e);
         }
