@@ -27,6 +27,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
+        android:directBootAware="true"
         android:allowBackup="false"
         android:label="ADB Auto-Enable"
         android:icon="@android:drawable/ic_dialog_info"
