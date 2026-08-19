@@ -6,10 +6,10 @@
     <!-- Required to receive boot events -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Required to enable wireless ADB -->
+    <!-- Required to enable wireless ADB (must be granted manually via 'adb shell pm grant') -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
 
-    <!-- Required for web server -->
+    <!-- Required for embedded web server -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Required to check WiFi connection and get device IP -->
@@ -19,11 +19,11 @@
     <!-- Required for mDNS discovery -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
-    <!-- Required for foreground service -->
+    <!-- Required for foreground service on Android 9+ and 14+ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
-    <!-- Required for notification on Android 13+ -->
+    <!-- Required for notifications on Android 13+ (API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -38,6 +38,7 @@
             android:name=".AdbConfigService"
             android:enabled="true"
             android:exported="false"
+            android:directBootAware="true"
             android:foregroundServiceType="connectedDevice" />
 
         <receiver

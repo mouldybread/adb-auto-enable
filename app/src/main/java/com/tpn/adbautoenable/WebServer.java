@@ -36,6 +36,10 @@ public class WebServer extends NanoHTTPD {
         this.adbHelper = new AdbHelper(context);
     }
 
+    private SharedPreferences getPrefs() {
+        return NetworkUtils.getDeviceProtectedPrefs(context, PREFS_NAME);
+    }
+
     @Override
     public Response serve(IHTTPSession session) {
         String uri = session.getUri();
@@ -55,8 +59,48 @@ public class WebServer extends NanoHTTPD {
             return handleLogs();
         } else if (uri.equals("/api/reset") && method == Method.POST) {
             return handleReset();
+        } else if (uri.equals("/api/webserver") && method == Method.POST) {
+            return handleToggleWebServer(session);
         } else {
             return newFixedLengthResponse(getHTML());
+        }
+    }
+
+    private Response handleToggleWebServer(IHTTPSession session) {
+        try {
+            Map<String, String> files = new HashMap<>();
+            session.parseBody(files);
+            Map<String, List<String>> params = session.getParameters();
+            List<String> enabledList = params.get("enabled");
+            String enabledStr = (enabledList != null && !enabledList.isEmpty()) ? enabledList.get(0) : "true";
+            boolean enable = Boolean.parseBoolean(enabledStr);
+
+            SharedPreferences prefs = getPrefs();
+            prefs.edit().putBoolean("web_server_enabled", enable).apply();
+            Log.i(TAG, "Web API: Web server enabled set to " + enable);
+
+            if (!enable) {
+                // Stop server on a background thread after a brief delay so response finishes sending
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(500);
+                        if (context instanceof AdbConfigService) {
+                            // Or stop self/server directly if reference is held
+                        }
+                        stop();
+                        Log.i(TAG, "WebServer stopped via API request");
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error stopping web server", e);
+                    }
+                }).start();
+            }
+
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                    "{\"success\":true,\"message\":\"Web server " + (enable ? "enabled" : "disabled (will stop shortly)") + "\"}");
+        } catch (Exception e) {
+            Log.e(TAG, "Web API: Toggle web server error", e);
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                    "{\"error\":\"" + e.getMessage() + "\"}");
         }
     }
 
@@ -85,7 +129,7 @@ public class WebServer extends NanoHTTPD {
             boolean success = adbHelper.pair("127.0.0.1", port, code);
 
             if (success) {
-                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                SharedPreferences prefs = getPrefs();
                 prefs.edit().putBoolean("is_paired", true).apply();
                 Log.i(TAG, "Web API: Pairing successful");
 
@@ -134,11 +178,12 @@ public class WebServer extends NanoHTTPD {
 
     private Response handleStatus() {
         Log.d(TAG, "handleStatus() called - checking status");
-        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs();
         String lastStatus = prefs.getString("last_status", "Not run yet");
         boolean isPaired = prefs.getBoolean("is_paired", false);
         int targetPort = getTargetPort();
         int currentPort = getCurrentPort();
+        boolean webServerEnabled = prefs.getBoolean("web_server_enabled", true);
 
         boolean adbTargetAvailable = checkTargetPortAvailable();
 
@@ -156,8 +201,8 @@ public class WebServer extends NanoHTTPD {
         }
 
         String json = String.format(Locale.US,
-                "{\"lastStatus\":\"%s\",\"currentPort\":%d,\"isPaired\":%b,\"hasPermission\":%b,\"adb5555Available\":%b,\"targetPort\":%d}",
-                lastStatus, currentPort, isPaired, permissionCached, adbTargetAvailable, targetPort
+                "{\"lastStatus\":\"%s\",\"currentPort\":%d,\"isPaired\":%b,\"hasPermission\":%b,\"adb5555Available\":%b,\"targetPort\":%d,\"webServerEnabled\":%b}",
+                lastStatus, currentPort, isPaired, permissionCached, adbTargetAvailable, targetPort, webServerEnabled
         );
         Log.d(TAG, "handleStatus() completed");
         return newFixedLengthResponse(Response.Status.OK, "application/json", json);
@@ -182,7 +227,7 @@ public class WebServer extends NanoHTTPD {
                         "{\"error\":\"Invalid port range (1-65535)\"}");
             }
 
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            SharedPreferences prefs = getPrefs();
             prefs.edit().putInt(KEY_TARGET_PORT, port).apply();
             Log.i(TAG, "Web API: Target port updated to " + port);
 
@@ -243,7 +288,7 @@ public class WebServer extends NanoHTTPD {
         try {
             Log.i(TAG, "Web API: Resetting pairing status");
 
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            SharedPreferences prefs = getPrefs();
             prefs.edit()
                     .putBoolean("is_paired", false)
                     .apply();
@@ -297,7 +342,7 @@ public class WebServer extends NanoHTTPD {
         }
 
         // Check last known successful port if different from target
-        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs();
         int lastPort = prefs.getInt("last_port", -1);
         if (lastPort > 0 && lastPort != targetPort) {
             if (!deviceIP.equals("127.0.0.1") && checkSocket(deviceIP, lastPort)) {
@@ -370,8 +415,7 @@ public class WebServer extends NanoHTTPD {
     }
 
     private int getTargetPort() {
-        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        return prefs.getInt(KEY_TARGET_PORT, 5555);
+        return getPrefs().getInt(KEY_TARGET_PORT, 5555);
     }
 
     private int discoverAdbPort() {
@@ -604,6 +648,17 @@ public class WebServer extends NanoHTTPD {
                 "    </div>\n" +
                 "    \n" +
                 "    <div class=\"card\">\n" +
+                "        <h2>🌐 Web Interface Control</h2>\n" +
+                "        <div class=\"instruction\">\n" +
+                "            Disable the web server to run completely silent on future boots and reduce resource usage:\n" +
+                "        </div>\n" +
+                "        <button onclick=\"toggleWebServer(false)\" class=\"danger\">🛑 Disable Web Server</button>\n" +
+                "        <button onclick=\"toggleWebServer(true)\" class=\"secondary\">🟢 Enable Web Server</button>\n" +
+                "        <div id=\"web-server-success\" class=\"success\"></div>\n" +
+                "        <div id=\"web-server-error\" class=\"error\"></div>\n" +
+                "    </div>\n" +
+                "\n" +
+                "    <div class=\"card\">\n" +
                 "        <h2>🧪 Testing</h2>\n" +
                 "        <div class=\"instruction\">\n" +
                 "            Test the full boot configuration sequence:\n" +
@@ -753,6 +808,42 @@ public class WebServer extends NanoHTTPD {
                 "            });\n" +
                 "        }\n" +
                 "        \n" +
+                "        function toggleWebServer(enable) {\n" +
+                "            if (!enable && !confirm('Are you sure you want to disable the web server? Once disabled, you will need to restart the app or use another method to access configuration settings.')) {\n" +
+                "                return;\n" +
+                "            }\n" +
+                "            \n" +
+                "            const successDiv = document.getElementById('web-server-success');\n" +
+                "            const errorDiv = document.getElementById('web-server-error');\n" +
+                "            \n" +
+                "            successDiv.style.display = 'none';\n" +
+                "            errorDiv.style.display = 'none';\n" +
+                "            showActivity('Updating web server setting...');\n" +
+                "            \n" +
+                "            fetch('/api/webserver', {\n" +
+                "                method: 'POST',\n" +
+                "                headers: {'Content-Type': 'application/x-www-form-urlencoded'},\n" +
+                "                body: 'enabled=' + enable\n" +
+                "            })\n" +
+                "            .then(r => r.json())\n" +
+                "            .then(data => {\n" +
+                "                if (data.success) {\n" +
+                "                    successDiv.textContent = data.message;\n" +
+                "                    successDiv.style.display = 'block';\n" +
+                "                    showResult(data.message, true);\n" +
+                "                } else {\n" +
+                "                    errorDiv.textContent = data.error || 'Failed to update setting';\n" +
+                "                    errorDiv.style.display = 'block';\n" +
+                "                    showResult(data.error || 'Failed', false);\n" +
+                "                }\n" +
+                "            })\n" +
+                "            .catch(e => {\n" +
+                "                successDiv.textContent = 'Web server setting updated. If disabled, connection will close shortly.';\n" +
+                "                successDiv.style.display = 'block';\n" +
+                "                showResult('Web server setting updated', true);\n" +
+                "            });\n" +
+                "        }\n" +
+                "        \n" +
                 "        function refreshLogs() {\n" +
                 "            fetch('/api/logs')\n" +
                 "                .then(r => r.json())\n" +
@@ -793,6 +884,7 @@ public class WebServer extends NanoHTTPD {
                 "            textarea.select();\n" +
                 "            document.execCommand('copy');\n" +
                 "            document.body.removeChild(textarea);\n" +
+                "            \n" +
                 "            const originalText = btn.textContent;\n" +
                 "            btn.textContent = '✓ Copied!';\n" +
                 "            setTimeout(() => { btn.textContent = originalText; }, 2000);\n" +

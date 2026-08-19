@@ -1,6 +1,7 @@
 package com.tpn.adbautoenable;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.LinkAddress;
 import android.net.LinkProperties;
@@ -81,5 +82,11 @@ public class NetworkUtils {
             Log.e(TAG, "Error checking network status", e);
             return false;
         }
+    }
+    public static SharedPreferences getDeviceProtectedPrefs(Context context, String prefsName) {
+        Context storageContext = context.isDeviceProtectedStorage()
+                ? context
+                : context.createDeviceProtectedStorageContext();
+        return storageContext.getSharedPreferences(prefsName, Context.MODE_PRIVATE);
     }
 }

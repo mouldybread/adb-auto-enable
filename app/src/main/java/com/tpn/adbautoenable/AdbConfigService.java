@@ -40,6 +40,10 @@ public class AdbConfigService extends Service {
     private WebServer webServer;
     private volatile boolean isConfiguring = false;
 
+    private SharedPreferences getPrefs() {
+        return NetworkUtils.getDeviceProtectedPrefs(this, PREFS_NAME);
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -48,8 +52,13 @@ public class AdbConfigService extends Service {
             createNotificationChannel();
             Log.i(TAG, "Notification channel created");
 
-            // Start web server in the service
-            startWebServer();
+            // Only start web server if enabled in preferences
+            SharedPreferences prefs = getPrefs();
+            if (prefs.getBoolean("web_server_enabled", true)) {
+                startWebServer();
+            } else {
+                Log.i(TAG, "Web server is disabled by user preference");
+            }
         } catch (Exception e) {
             Log.e(TAG, "Error in onCreate", e);
         }
@@ -436,7 +445,7 @@ public class AdbConfigService extends Service {
 
     private int scanForAdbPort() {
         Log.i(TAG, "Starting full ephemeral port scan (32768-60999)...");
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs();
         int lastPort = prefs.getInt(KEY_LAST_PORT, -1);
 
         AdbHelper adbHelper = new AdbHelper(this);
@@ -487,18 +496,15 @@ public class AdbConfigService extends Service {
     }
 
     private int getTargetPort() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        return prefs.getInt(KEY_TARGET_PORT, 5555);
+        return getPrefs().getInt(KEY_TARGET_PORT, 5555);
     }
 
     private void updateStatus(String status) {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        prefs.edit().putString(KEY_LAST_STATUS, status).apply();
+        getPrefs().edit().putString(KEY_LAST_STATUS, status).apply();
     }
 
     private void saveLastPort(int port) {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        prefs.edit().putInt(KEY_LAST_PORT, port).apply();
+        getPrefs().edit().putInt(KEY_LAST_PORT, port).apply();
     }
 
     private void createNotificationChannel() {
