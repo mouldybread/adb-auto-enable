@@ -55,6 +55,8 @@ adb connect your-device-ip:5555
 ## Troubleshooting
 
 ### Permission Not Granted / Auto-Grant Failed
+> [!NOTE]
+> Because of a bug in v.0.3.3, auto-grant status will not be accurately reflected in the web-based gui until after a reboot. Check the logs to see if the grant was successful. 
 
 If auto-grant fails, you can manually grant the permission from a computer:
 
