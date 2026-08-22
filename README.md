@@ -54,7 +54,7 @@ adb connect your-device-ip:5555
 
 ## Troubleshooting
 ### Pairing fails
-If pairing fails please open an issue and include your device, version, logs from the web-based gui and/or adb logs:
+If pairing fails please open an issue and include your device, version, logs from the web-based gui and/or ADB logs:
 ```
 adb logcat "adbd:V ADBAutoEnable:V *:S"
 ```
