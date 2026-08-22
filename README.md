@@ -29,7 +29,7 @@ Developed on a Chromecast with Google TV (CCwGTV), results may vary on other har
 
 ### Requirements:
 
-- Android 13+ (tested on Chromecast with Google TV and modern Android builds)
+- Android 14+ (tested on Chromecast with Google TV and modern Android builds)
 - Wi-Fi connection
 ### 1. Installation
 
