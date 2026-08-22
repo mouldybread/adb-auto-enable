@@ -6,18 +6,6 @@ Android 14 introduces enhanced ADB security which disables and randomises the po
 
 Developed on a Chromecast with Google TV (CCwGTV), results may vary on other hardware. Only works with WiFi - not Ethernet.
 
-
-##  How It Works
-
-1. **One-Time Pairing**: App pairs with itself via localhost, storing authentication keys.
-2. **Auto-Grant Permission**: After pairing, the app automatically grants itself `WRITE_SECURE_SETTINGS` permission via local ADB.
-3. **Boot Activation**: On device boot, `BootReceiver` instantly launches `AdbConfigService` to satisfy Android 14+ foreground service launch rules.
-4. **Early Setting Enforcement**: Writes `adb_wifi_enabled = 1` to `Settings.Global` before any network or sleep delays.
-5. **Stabilization & Network Wait**: Service waits for an active Wi-Fi/Ethernet IP and allows a 30-second system stabilization period.
-6. **Port Discovery**: Discovers the randomized ADB port using mDNS or a 64-thread parallel socket sweep (`32768–60999`).
-7. **Self-Connection & Switch**: Connects to the local ADB daemon (127.0.0.1 loopback -> device LAN IP fallback) and sends the tcpip:<target_port> command.
-8. **Done!**: ADB is available on your target port for external connections!
-
 > [!WARNING]
 > **SECURITY WARNING:** This application enables Android Debug Bridge (ADB) on your configured port (default 5555), which provides remote access to your device with full system privileges. While ADB connections require RSA key authentication (users must accept the connection on first pairing), **once a computer is authorized, it has permanent unrestricted access** to install applications, access all data, execute shell commands, and take complete control of your device without further prompts. Additionally, the RSA authentication prompt is vulnerable to overlay attacks where malicious apps can trick users into authorizing connections. **This app should ONLY be used on isolated or trusted networks** (such as a home network behind a firewall with no port forwarding) and **NEVER on public WiFi, guest networks, or any network you do not fully control**. Exposing ADB to the internet or untrusted networks can result in complete device compromise if an attacker gains authorization, either through social engineering, overlay attacks, or physical access to previously paired computers. Use this tool only on devices you own and ensure your network is properly secured with a firewall blocking external access.
 
@@ -102,6 +90,17 @@ The web server runs on port 9093 in a foreground service. If you can't access it
    ```
 2. Verify the device IP address on the main app screen.
 3. Ensure you are accessing from the same network subnet: `http://device-ip:9093`.
+
+##  How It Works
+
+1. **One-Time Pairing**: App pairs with itself via localhost, storing authentication keys.
+2. **Auto-Grant Permission**: After pairing, the app automatically grants itself `WRITE_SECURE_SETTINGS` permission via local ADB.
+3. **Boot Activation**: On device boot, `BootReceiver` instantly launches `AdbConfigService` to satisfy Android 14+ foreground service launch rules.
+4. **Early Setting Enforcement**: Writes `adb_wifi_enabled = 1` to `Settings.Global` before any network or sleep delays.
+5. **Stabilization & Network Wait**: Service waits for an active Wi-Fi/Ethernet IP and allows a 30-second system stabilization period.
+6. **Port Discovery**: Discovers the randomized ADB port using mDNS or a 64-thread parallel socket sweep (`32768–60999`).
+7. **Self-Connection & Switch**: Connects to the local ADB daemon (127.0.0.1 loopback -> device LAN IP fallback) and sends the tcpip:<target_port> command.
+8. **Done!**: ADB is available on your target port for external connections!
 
 ## Technical Details
 
