@@ -49,17 +49,30 @@ jobs:
         run: |
           echo "VERSION_NAME=$(grep 'versionName' app/build.gradle | awk '{print $3}' | tr -d '\"')" >> $GITHUB_OUTPUT
 
+      - name: Rename APK file
+        run: |
+          VERSION_NAME="${{ steps.version.outputs.VERSION_NAME }}"
+          OLD_PATH="app/build/outputs/apk/release/app-release.apk"
+          NEW_PATH="app/build/outputs/apk/release/ADB-auto-enable-${VERSION_NAME}.apk"
+          if [ -f "$OLD_PATH" ]; then
+            mv "$OLD_PATH" "$NEW_PATH"
+            echo "Successfully renamed to ADB-auto-enable-${VERSION_NAME}.apk"
+          else
+            echo "Error: Release APK not found at $OLD_PATH"
+            exit 1
+          fi
+
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: adbautoenable-${{ steps.version.outputs.VERSION_NAME }}-release
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/release/ADB-auto-enable-*.apk
 
       - name: Create Release and Upload APK
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: app/build/outputs/apk/release/*.apk
+          files: app/build/outputs/apk/release/ADB-auto-enable-*.apk
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
