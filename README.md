@@ -53,6 +53,11 @@ adb connect your-device-ip:5555
 ```
 
 ## Troubleshooting
+### Pairing fails
+If pairing fails please open an issue and include your device, version, logs from the web-based gui and/or adb logs:
+```
+adb logcat "adbd:V ADBAutoEnable:V *:S"
+```
 
 ### Permission Not Granted / Auto-Grant Failed
 > [!NOTE]
@@ -71,7 +76,7 @@ adb shell pm grant com.tpn.adbautoenable android.permission.WRITE_SECURE_SETTING
 Check logs in the web UI at `http://device-ip:9093` or via ADB:
 
 ```bash
-adb logcat -s ADBAutoEnable
+adb logcat "adbd:V ADBAutoEnable:V *:S"
 ```
 
 Look for:
