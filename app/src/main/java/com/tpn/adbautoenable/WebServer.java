@@ -133,6 +133,9 @@ public class WebServer extends NanoHTTPD {
                 prefs.edit().putBoolean("is_paired", true).apply();
                 Log.i(TAG, "Web API: Pairing successful");
 
+                //Clear permission cache so it re-checks after self-grant
+                permissionCached = null;
+
                 new Thread(() -> {
                     try {
                         Thread.sleep(2000);
@@ -287,6 +290,9 @@ public class WebServer extends NanoHTTPD {
     private Response handleReset() {
         try {
             Log.i(TAG, "Web API: Resetting pairing status");
+
+            //Clear permission cache on reset too
+            permissionCached = null;
 
             SharedPreferences prefs = getPrefs();
             prefs.edit()
