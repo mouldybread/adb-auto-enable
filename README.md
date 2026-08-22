@@ -74,7 +74,7 @@ If auto-grant fails, you can manually grant the permission from a computer:
 adb shell pm grant com.tpn.adbautoenable android.permission.WRITE_SECURE_SETTINGS
 ```
 
----
+
 
 ### Boot Configuration Not Running
 
@@ -90,7 +90,7 @@ Look for:
 - `"Waiting for WiFi connection..."`
 - `"Successfully configured ADB on port 5555!"`
 
----
+
 
 ### Web Server Not Accessible
 
@@ -119,14 +119,6 @@ adb-auto-enable/
 ├── app/src/main/AndroidManifest.xml
 └── README.md
 ```
-
-### ADB Protocol Implementation
-
-The app implements the native ADB wire protocol:
-- **CONNECT** message with `host::features` service
-- **AUTH** signature/token exchange for RSA authentication
-- **OPEN** service channel to local ADB daemon
-- **WRITE** commands like `tcpip:<port>` and `pm grant`
 
 Authentication keys are generated locally and stored in `/data/data/com.tpn.adbautoenable/files/`.
 
