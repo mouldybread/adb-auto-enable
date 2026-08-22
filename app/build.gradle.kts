@@ -10,8 +10,10 @@ android {
         applicationId = "com.tpn.adbautoenable"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "0.3.3"
+
+        // Dynamically accept CI properties or fall back to local defaults
+        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 12
+        versionName = project.findProperty("CI_VERSION_NAME") as? String ?: "0.3.3"
     }
 
     signingConfigs {
