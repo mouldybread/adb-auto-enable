@@ -51,17 +51,15 @@ adb install app/build/outputs/apk/release/app-release.apk
 2. On your Android device:
    - Go to **Settings → Developer Options → Wireless Debugging**
    - Tap **"Pair device with pairing code"**
-3. Enter the **pairing code** and **pairing port** into the web interface or app screen.
+3. Keep the "Pair device with pairing code" screen open on your device. Enter the **pairing code** and **pairing port** into the web interface.
 4. Click **"Pair Device"**.
 5. The app will automatically attempt to self-grant required permissions!
 
 ### 3. Verify Setup
 
-1. Check the web UI status — Permission should show "✓ Granted".
-2. Click **"Switch Target Port Now"** in the web interface to test the configuration manually.
-3. Check status — should show "✓ Available".
-
-### 4. Test Auto-Boot
+1. Click **"Switch Target Port Now"** in the web interface to test the configuration manually.
+2. Check status — should show "✓ Available".
+3. Test Auto-Boot
 
 Reboot your device:
 
@@ -169,6 +167,5 @@ Success! (with 3 retry attempts if needed)
 
 - Google, for forcing my hardware to update consequently creating this mess
 - [This Home Assistant Issue](https://github.com/home-assistant/core/issues/148359)
-- Inspired by various Tasker projects and Magisk modules
 - Uses [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd) for embedded web server
 - Uses [libadb-android](https://github.com/MuntashirAkon/libadb-android) for ADB protocol implementation
