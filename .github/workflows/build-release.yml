@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Needed if git commit count is used for fallback versionCode
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -36,18 +38,33 @@ jobs:
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > keystore.jks
 
+      - name: Extract Version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+            PATCH=$(echo "$PATCH" | tr -cd '0-9')
+            CODE=$(( (${MAJOR:-0} * 10000) + (${MINOR:-0} * 100) + ${PATCH:-0} ))
+          else
+            VERSION=$(grep 'versionName' app/build.gradle | head -n 1 | awk '{print $3}' | tr -d '"')
+            CODE=$(git rev-list --count HEAD)
+          fi
+          echo "VERSION_NAME=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION_CODE=$CODE" >> $GITHUB_OUTPUT
+          echo "Extracted Version Name: $VERSION, Code: $CODE"
+
       - name: Build Release APK
-        run: ./gradlew assembleRelease
+        run: |
+          ./gradlew assembleRelease \
+            -PCI_VERSION_NAME="${{ steps.version.outputs.VERSION_NAME }}" \
+            -PCI_VERSION_CODE="${{ steps.version.outputs.VERSION_CODE }}"
         env:
           KEYSTORE_FILE: ../keystore.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-
-      - name: Get version name
-        id: version
-        run: |
-          echo "VERSION_NAME=$(grep 'versionName' app/build.gradle | awk '{print $3}' | tr -d '\"')" >> $GITHUB_OUTPUT
 
       - name: Rename APK file
         run: |
