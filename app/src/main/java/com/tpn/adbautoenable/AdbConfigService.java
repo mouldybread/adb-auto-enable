@@ -4,9 +4,11 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Bundle;
@@ -44,11 +46,37 @@ public class AdbConfigService extends Service {
         return NetworkUtils.getDeviceProtectedPrefs(this, PREFS_NAME);
     }
 
+    // Some devices disable BootReceiver behind the app's back, which takes it out
+    // of the BOOT_COMPLETED resolution set and stops the app ever starting at
+    // boot. A shell cannot undo that for an app that is not test-only, and
+    // reinstalling loses the app's adb key, but the app may set its own
+    // components, so it is repaired here on every service start.
+    private void ensureBootReceiverEnabled() {
+        try {
+            PackageManager pm = getPackageManager();
+            ComponentName receiver = new ComponentName(this, BootReceiver.class);
+            // Anything that is not enabled, rather than the one disabled state:
+            // DISABLED_USER and DISABLED_UNTIL_USED keep it out of the resolution
+            // set just as surely, and DEFAULT means the manifest value, enabled.
+            int state = pm.getComponentEnabledSetting(receiver);
+            if (state != PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                    && state != PackageManager.COMPONENT_ENABLED_STATE_DEFAULT) {
+                pm.setComponentEnabledSetting(receiver,
+                        PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                        PackageManager.DONT_KILL_APP);
+                Log.i(TAG, "BootReceiver was disabled, re-enabled it");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Could not check or re-enable BootReceiver", e);
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
         Log.i(TAG, "AdbConfigService onCreate() called");
         try {
+            ensureBootReceiverEnabled();
             createNotificationChannel();
             Log.i(TAG, "Notification channel created");
 
