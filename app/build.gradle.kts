@@ -5,10 +5,13 @@ plugins {
 // Versioning: versionName is the single source of truth and versionCode is derived from it
 // as major*10000 + minor*100 + patch (minor and patch must be <= 99).
 //   CI/tag build : -PCI_VERSION_NAME=0.3.5  (passed by build-release.yml from the git tag)
+//   CI/dispatch  : -PCI_VERSION_NAME=0.3.5-1-ga07866c (git describe; never published)
 //   Local build  : derived from `git describe --tags --match v[0-9]*`, so it matches CI
 //   No git/tags  : 0.0.0-dev (versionCode 1)
+// A -suffix does not change the versionCode, which comes from the leading MAJOR.MINOR[.PATCH].
+// Tag builds can never carry a suffix: build-release.yml rejects suffixed tags.
 val semverRegex = Regex("^v?([0-9]+)[.]([0-9]+)(?:[.]([0-9]+))?")
-val strictVersionRegex = Regex("^[0-9]+[.][0-9]+([.][0-9]+)?$")
+val strictVersionRegex = Regex("^[0-9]+[.][0-9]+([.][0-9]+)?(-[0-9A-Za-z.-]+)?$")
 
 fun gitDescribe(): String? = try {
     providers.exec {
@@ -23,7 +26,7 @@ val ciVersionName: String? = (project.findProperty("CI_VERSION_NAME") as? String
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
 if (ciVersionName != null && !strictVersionRegex.matches(ciVersionName)) {
-    throw GradleException("CI_VERSION_NAME '" + ciVersionName + "' must look like MAJOR.MINOR[.PATCH]")
+    throw GradleException("CI_VERSION_NAME '" + ciVersionName + "' must look like MAJOR.MINOR[.PATCH][-suffix]")
 }
 
 val resolvedVersionName: String = ciVersionName
