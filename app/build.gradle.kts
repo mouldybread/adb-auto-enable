@@ -41,7 +41,7 @@ val resolvedVersionCode: Int = run {
     if (minor > 99 || patch > 99) {
         throw GradleException("minor and patch must be <= 99 for versionCode scheme: " + resolvedVersionName)
     }
-    major * 10000 + minor * 100 + patch
+    (major * 10000 + minor * 100 + patch).coerceAtLeast(1)
 }
 
 android {
@@ -86,7 +86,7 @@ android {
     }
 }
 
-dependencies {
+ dependencies {
     implementation(libs.nanohttpd)
     implementation(libs.libadb)
     implementation(libs.conscrypt)
