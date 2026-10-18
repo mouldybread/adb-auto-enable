@@ -12,81 +12,90 @@ import android.util.Log;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 public class NetworkUtils {
     private static final String TAG = "ADBAutoEnable";
 
-    /**
-     * Gets the live IPv4 address of the active network interface.
-     * Safe for API level 21+.
-     */
-    public static String getLiveDeviceIP(Context context) {
+    /** Local Wi-Fi/Ethernet addresses, IPv4 first; never the VPN default route. */
+    @SuppressWarnings("deprecation")
+    public static List<String> getPhysicalAddresses(Context context) {
+        Set<String> ipv4 = new LinkedHashSet<>();
+        Set<String> ipv6 = new LinkedHashSet<>();
         try {
             ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm != null) {
-                Network activeNetwork = cm.getActiveNetwork();
-                if (activeNetwork != null) {
-                    LinkProperties linkProperties = cm.getLinkProperties(activeNetwork);
-                    if (linkProperties != null) {
-                        for (LinkAddress linkAddress : linkProperties.getLinkAddresses()) {
-                            InetAddress address = linkAddress.getAddress();
-                            if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
-                                return address.getHostAddress();
-                            }
+                for (Network network : cm.getAllNetworks()) {
+                    NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+                    if (caps == null || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue;
+                    if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                            && !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) continue;
+                    LinkProperties links = cm.getLinkProperties(network);
+                    if (links == null) continue;
+                    for (LinkAddress link : links.getLinkAddresses()) add(link.getAddress(), ipv4, ipv6);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "LAN network lookup failed; trying LAN interfaces", e);
+        }
+        if (ipv4.isEmpty() && ipv6.isEmpty()) {
+            // Conservative fallback: do not accidentally select cellular, bridges or VPNs.
+            try {
+                java.util.Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+                if (interfaces != null) {
+                    for (NetworkInterface iface : Collections.list(interfaces)) {
+                        String name = iface.getName();
+                        if (!iface.isUp() || iface.isLoopback() || iface.isPointToPoint()) continue;
+                        if (!(name.startsWith("wlan") || name.startsWith("eth")
+                                || name.startsWith("en") || name.startsWith("wifi"))) continue;
+                        for (InetAddress address : Collections.list(iface.getInetAddresses())) {
+                            add(address, ipv4, ipv6);
                         }
                     }
                 }
+            } catch (Exception e) {
+                Log.w(TAG, "LAN interface lookup failed", e);
             }
-
-            // NetworkInterface enumeration fallback
-            List<NetworkInterface> networkInterfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
-            for (NetworkInterface networkInterface : networkInterfaces) {
-                if (!networkInterface.isUp() || networkInterface.isLoopback()) continue;
-
-                List<InetAddress> addresses = Collections.list(networkInterface.getInetAddresses());
-                for (InetAddress address : addresses) {
-                    if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
-                        return address.getHostAddress();
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to resolve live IP address", e);
         }
-        return "127.0.0.1";
+        List<String> result = new ArrayList<>(ipv4);
+        result.addAll(ipv6);
+        return result;
     }
 
-    /**
-     * Checks whether the device has an active Wi-Fi, Ethernet, or VPN connection.
-     * Excludes raw cellular data to keep the service bound to LAN/VPN environments.
-     * Safe for API level 21+.
-     */
+    private static void add(InetAddress address, Set<String> ipv4, Set<String> ipv6) {
+        if (address.isLoopbackAddress() || address.isAnyLocalAddress() || address.isMulticastAddress()) return;
+        String host = address.getHostAddress();
+        if (host == null) return;
+        if (address instanceof Inet4Address) ipv4.add(host);
+        else ipv6.add(host);
+    }
+
+    /** Compatibility entry point used by both device and web UI. */
+    public static String getLiveDeviceIP(Context context) {
+        List<String> addresses = getPhysicalAddresses(context);
+        return addresses.isEmpty() ? "127.0.0.1" : addresses.get(0);
+    }
+
+    public static boolean isLocalPhysicalAddress(Context context, String host) {
+        return LocalAdbAddresses.matches(host, getPhysicalAddresses(context));
+    }
+
+    public static List<String> getAdbCandidateHosts(Context context, String resolvedHost) {
+        return LocalAdbAddresses.candidates(resolvedHost, getPhysicalAddresses(context));
+    }
+
+    /** LAN readiness does not require Internet access or a validated default route. */
     public static boolean isNetworkConnected(Context context) {
-        try {
-            ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm == null) return false;
-
-            Network network = cm.getActiveNetwork();
-            if (network != null) {
-                NetworkCapabilities capabilities = cm.getNetworkCapabilities(network);
-                return capabilities != null &&
-                        (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
-                                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) &&
-                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
-            }
-            return false;
-        } catch (Exception e) {
-            Log.e(TAG, "Error checking network status", e);
-            return false;
-        }
+        return !getPhysicalAddresses(context).isEmpty();
     }
+
     public static SharedPreferences getDeviceProtectedPrefs(Context context, String prefsName) {
         Context storageContext = context.isDeviceProtectedStorage()
-                ? context
-                : context.createDeviceProtectedStorageContext();
+                ? context : context.createDeviceProtectedStorageContext();
         return storageContext.getSharedPreferences(prefsName, Context.MODE_PRIVATE);
     }
 }
