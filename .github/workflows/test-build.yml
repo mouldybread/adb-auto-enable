@@ -28,6 +28,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -35,7 +37,7 @@ jobs:
       - name: Run debug unit tests and build debug APK
         run: >-
           ./gradlew --no-daemon testDebugUnitTest assembleDebug
-          -PCI_VERSION_NAME="test-${GITHUB_SHA::7}"
+          -PCI_VERSION_NAME="0.0.1-test-${GITHUB_SHA::7}"
 
       - name: Upload test APK
         uses: actions/upload-artifact@v4
