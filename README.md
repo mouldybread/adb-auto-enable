@@ -1,4 +1,16 @@
+<div align="center">
+  
 # 🔧 adb-auto-enable
+
+[![GitHub stars](https://img.shields.io/github/stars/mouldybread/adb-auto-enable.svg?style=social)](https://github.com/mouldybread/adb-auto-enable)
+[![GitHub release](https://img.shields.io/github/v/release/mouldybread/adb-auto-enable?style=flat-square)](https://github.com/mouldybread/adb-auto-enable/releases)
+[![GitHub All Releases](https://img.shields.io/github/downloads/mouldybread/adb-auto-enable/total?style=flat-square)](https://github.com/mouldybread/adb-auto-enable/releases)
+[![GitHub license](https://img.shields.io/github/license/mouldybread/adb-auto-enable?style=flat-square)](https://github.com/mouldybread/adb-auto-enable/blob/main/LICENSE)
+[![GitHub issues](https://img.shields.io/github/issues/mouldybread/adb-auto-enable?style=flat-square)](https://github.com/mouldybread/adb-auto-enable/issues)
+
+</div>
+
+
 
 **Automatically enable wireless ADB debugging and switch to your chosen port (default 5555) on every boot, no root required!**
 
