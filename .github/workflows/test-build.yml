@@ -1,0 +1,46 @@
+name: Test APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run debug unit tests and build debug APK
+        run: >-
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug
+          -PCI_VERSION_NAME="test-${GITHUB_SHA::7}"
+
+      - name: Upload test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: adb-auto-enable-test-${{ github.run_number }}-${{ github.run_attempt }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
