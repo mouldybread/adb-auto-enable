@@ -41,7 +41,7 @@ adb install app/build/outputs/apk/release/app-release.apk
 ```
 
 > [!IMPORTANT]
-> **First-Time Installation Note:** After installing the APK, you **must open the app on your device once** (via *Settings → Apps → See All Apps → ADB Auto-Enable*) to start the background web server before you can access `http://your-device-ip:9093`.
+> **First-Time Installation Note:** After installing the APK, you **must open the app on your device once** (via *Settings → Apps → See All Apps → ADB Auto-Enable*) to start the background web server before you can access `http://your-device-ip:9093`. Allow notifications when Android asks so the app can show boot configuration and permission-status updates.
 
 ### 2. Initial Pairing
 
@@ -52,7 +52,21 @@ adb install app/build/outputs/apk/release/app-release.apk
 3. Keep the "Pair device with pairing code" screen open on your device. Enter the **pairing code** and **pairing port** into the web interface.
 4. Click **"Pair Device"**.
 
-### 3. Verify Setup
+### 3. Secure Settings Permission and Device Security Policies
+
+For fully automatic operation after boot, the app needs Android's **Secure Settings Permission** (`WRITE_SECURE_SETTINGS`) to enable wireless debugging and preserve its ADB authorization settings. After pairing, the app attempts to grant this permission to itself through its local ADB connection. If it is unavailable, the app shows an **automatic setup restricted** notification; use **Retry Secure Settings Permission** in the web interface after updating the applicable device policy. **System Status** shows the actual result.
+
+Some OEM Android builds restrict ADB operations that modify secure system settings through an additional developer-security control or device policy. For example, Xiaomi/HyperOS devices may require **Settings → Developer options → USB debugging (Security settings)** to be enabled before an ADB permission grant is permitted. That is Xiaomi's label, not a universal Android setting: other devices may use a different USB-debugging, permission-monitoring, enterprise-security, or device-management control.
+
+If the permission remains unavailable, you can request it from a trusted computer while USB debugging is connected:
+
+```bash
+adb shell pm grant com.tpn.adbautoenable android.permission.WRITE_SECURE_SETTINGS
+```
+
+If this command is rejected by the device, the restriction is enforced by the system and cannot be bypassed by the app without root or system-level integration. The app can still discover and switch an already-running wireless ADB service, but it cannot guarantee that wireless debugging will be enabled automatically after a reboot.
+
+### 4. Verify Setup
 
 1. (Optional) Click **"Switch Target Port Now"** in the web interface to test the configuration manually.
 2. (Optional) Wait 30 seconds and check status — should show "✓ Available".
@@ -99,9 +113,9 @@ The web server runs on port 9093 in a foreground service. If you can't access it
 ##  How It Works
 
 1. **One-Time Pairing**: App pairs with itself via localhost, storing authentication keys.
-2. **Auto-Grant Permission**: After pairing, the app automatically grants itself `WRITE_SECURE_SETTINGS` permission via local ADB.
+2. **Secure Settings Permission**: After pairing, the app requests `WRITE_SECURE_SETTINGS` via local ADB. Whether it is granted is subject to the device's developer-security policy and is shown in the web interface.
 3. **Boot Activation**: On device boot, `BootReceiver` instantly launches `AdbConfigService` to satisfy Android 14+ foreground service launch rules.
-4. **Early Setting Enforcement**: Writes `adb_wifi_enabled = 1` to `Settings.Global` before any network or sleep delays.
+4. **Early Setting Enforcement**: When the Secure Settings Permission is available, writes `adb_wifi_enabled = 1` to `Settings.Global` before any network or sleep delays.
 5. **Stabilization & Network Wait**: Service waits for an active Wi-Fi/Ethernet IP and allows a 30-second system stabilization period.
 6. **Port Discovery**: Discovers the randomized ADB port using mDNS or a 64-thread parallel socket sweep (`32768–60999`).
 7. **Self-Connection & Switch**: Connects to the local ADB daemon (127.0.0.1 loopback -> device LAN IP fallback) and sends the tcpip:<target_port> command.

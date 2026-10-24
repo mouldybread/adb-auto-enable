@@ -1,7 +1,9 @@
 package com.tpn.adbautoenable;
 
+import android.app.NotificationManager;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.util.Log;
@@ -21,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 
 public class WebServer extends NanoHTTPD {
     private static final String TAG = "ADBAutoEnable";
+    private static final int PERMISSION_RESTRICTION_NOTIFICATION_ID = 2;
     private static final String PREFS_NAME = "ADBAutoEnablePrefs";
     private static final String KEY_TARGET_PORT = "target_port";
     private static final String SERVICE_TYPE = "_adb-tls-connect._tcp";
@@ -47,6 +50,8 @@ public class WebServer extends NanoHTTPD {
             return handlePairing(session);
         } else if (uri.equals("/api/status")) {
             return handleStatus();
+        } else if (uri.equals("/api/permission") && method == Method.POST) {
+            return handleRetrySecureSettingsPermission();
         } else if (uri.equals("/api/test")) {
             return handleTest();
         } else if (uri.equals("/api/switch")) {
@@ -145,12 +150,13 @@ public class WebServer extends NanoHTTPD {
                         String deviceIP = getDeviceIP();
                         Log.i(TAG, "Found ADB on port " + adbPort + ", attempting self-grant via " + deviceIP);
                         boolean granted = adbHelper.selfGrantPermission(deviceIP, adbPort,
-                                "com.tpn.adbautoenable", "android.permission.WRITE_SECURE_SETTINGS");
+                                context.getPackageName(), "android.permission.WRITE_SECURE_SETTINGS");
 
                         if (granted) {
                             Log.i(TAG, "Successfully self-granted WRITE_SECURE_SETTINGS permission!");
+                            clearPermissionRestrictionNotification();
                         } else {
-                            Log.w(TAG, "Failed to self-grant permission, user will need to grant manually");
+                            Log.w(TAG, "Failed to self-grant Secure Settings Permission; device security policy may restrict it");
                         }
 
                         TclAutostartProtection.Result policy = TclAutostartProtection.apply(
@@ -171,7 +177,7 @@ public class WebServer extends NanoHTTPD {
                 }).start();
 
                 return newFixedLengthResponse(Response.Status.OK, "application/json",
-                        "{\"success\":true,\"message\":\"Pairing successful! Attempting to self-grant permissions...\"}");
+                        "{\"success\":true,\"message\":\"Pairing successful! Requesting Secure Settings Permission...\"}");
             } else {
                 return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
                         "{\"error\":\"Pairing failed. Make sure wireless debugging is enabled and code is correct.\"}");
@@ -187,6 +193,39 @@ public class WebServer extends NanoHTTPD {
         }
     }
 
+    private Response handleRetrySecureSettingsPermission() {
+        if (!getPrefs().getBoolean("is_paired", false)) {
+            return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                    "{\"error\":\"Pair the device before requesting Secure Settings Permission.\"}");
+        }
+
+        new Thread(() -> {
+            try {
+                Log.i(TAG, "Web API: Retrying WRITE_SECURE_SETTINGS permission request");
+                int adbPort = discoverAdbPort();
+                if (adbPort == -1) {
+                    Log.w(TAG, "Web API: Could not discover ADB port for permission request");
+                    return;
+                }
+
+                String deviceIP = getDeviceIP();
+                boolean granted = adbHelper.selfGrantPermission(deviceIP, adbPort,
+                        context.getPackageName(), "android.permission.WRITE_SECURE_SETTINGS");
+                if (granted) {
+                    Log.i(TAG, "Web API: WRITE_SECURE_SETTINGS permission granted");
+                    clearPermissionRestrictionNotification();
+                } else {
+                    Log.w(TAG, "Web API: Secure Settings Permission was not granted; device security policy may restrict it");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Web API: Permission request failed", e);
+            }
+        }).start();
+
+        return newFixedLengthResponse(Response.Status.OK, "application/json",
+                "{\"success\":true,\"message\":\"Permission request started. The result will appear in System Status shortly.\"}");
+    }
+
     private Response handleStatus() {
         Log.d(TAG, "handleStatus() called - checking status");
         SharedPreferences prefs = getPrefs();
@@ -195,15 +234,25 @@ public class WebServer extends NanoHTTPD {
         int targetPort = getTargetPort();
         int currentPort = getCurrentPort();
         boolean webServerEnabled = prefs.getBoolean("web_server_enabled", true);
+        boolean writeSecureSettingsAvailable = context.checkSelfPermission(
+                "android.permission.WRITE_SECURE_SETTINGS") == PackageManager.PERMISSION_GRANTED;
 
         boolean adbTargetAvailable = checkTargetPortAvailable();
 
         String json = String.format(Locale.US,
-                "{\"lastStatus\":\"%s\",\"currentPort\":%d,\"isPaired\":%b,\"adb5555Available\":%b,\"targetPort\":%d,\"webServerEnabled\":%b}",
-                lastStatus, currentPort, isPaired, adbTargetAvailable, targetPort, webServerEnabled
+                "{\"lastStatus\":\"%s\",\"currentPort\":%d,\"isPaired\":%b,\"adb5555Available\":%b,\"targetPort\":%d,\"webServerEnabled\":%b,\"writeSecureSettingsAvailable\":%b}",
+                lastStatus, currentPort, isPaired, adbTargetAvailable, targetPort, webServerEnabled,
+                writeSecureSettingsAvailable
         );
         Log.d(TAG, "handleStatus() completed");
         return newFixedLengthResponse(Response.Status.OK, "application/json", json);
+    }
+
+    private void clearPermissionRestrictionNotification() {
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.cancel(PERMISSION_RESTRICTION_NOTIFICATION_ID);
+        }
     }
 
     private Response handleSetPort(IHTTPSession session) {
@@ -581,6 +630,10 @@ public class WebServer extends NanoHTTPD {
                 "                <div class=\"status-value\">" + deviceIP + "</div>\n" +
                 "            </div>\n" +
                 "            <div class=\"status-row\">\n" +
+                "                <div class=\"status-label\">Secure Settings Permission:</div>\n" +
+                "                <div class=\"status-value\" id=\"secure-settings-status\">Loading...</div>\n" +
+                "            </div>\n" +
+                "            <div class=\"status-row\">\n" +
                 "                <div class=\"status-label\">Last Boot Status:</div>\n" +
                 "                <div class=\"status-value\" id=\"last-status\">Loading...</div>\n" +
                 "            </div>\n" +
@@ -607,12 +660,19 @@ public class WebServer extends NanoHTTPD {
                 "        </div>\n" +
                 "        <div id=\"pair-success\" class=\"success\"></div>\n" +
                 "        <div id=\"pair-error\" class=\"error\"></div>\n" +
-                "        <p><em>After pairing, the app will attempt to automatically grant itself permissions. Check the status above to verify.</em></p>\n" +
+                "        <p><em>After pairing, the app requests the Secure Settings Permission. If it is unavailable, use <strong>Retry Secure Settings Permission</strong> after checking your device's developer-security policy.</em></p>\n" +
                 "    </div>\n" +
                 "    \n" +
                 "    <div class=\"card\" id=\"paired-card\" style=\"display:none\">\n" +
                 "        <h2>✅ Device Paired</h2>\n" +
                 "        <div class=\"instruction\">Your device is successfully paired and ready to use!</div>\n" +
+                "        <div class=\"instruction\">\n" +
+                "            <strong>Secure Settings Permission:</strong> Required for automatic wireless-debugging setup after boot.\n" +
+                "            If it is not available, retry the request after allowing the relevant OEM developer-security control.\n" +
+                "        </div>\n" +
+                "        <button onclick=\"retrySecureSettingsPermission()\" class=\"secondary\">🔐 Retry Secure Settings Permission</button>\n" +
+                "        <div id=\"permission-success\" class=\"success\"></div>\n" +
+                "        <div id=\"permission-error\" class=\"error\"></div>\n" +
                 "        <button onclick=\"resetPairing()\" class=\"danger\">🔄 Reset Pairing</button>\n" +
                 "        <div id=\"reset-success\" class=\"success\"></div>\n" +
                 "        <div id=\"reset-error\" class=\"error\"></div>\n" +
@@ -700,6 +760,9 @@ public class WebServer extends NanoHTTPD {
                 "                        '<span class=\"status good\">✓ Paired</span>' : \n" +
                 "                        '<span class=\"status bad\">✗ Not paired</span>';\n" +
                 "                    document.getElementById('port-status').innerHTML = data.adb5555Available ? \n" +
+                "                        '<span class=\"status good\">✓ Available</span>' : \n" +
+                "                        '<span class=\"status bad\">✗ Not available</span>';\n" +
+                "                    document.getElementById('secure-settings-status').innerHTML = data.writeSecureSettingsAvailable ? \n" +
                 "                        '<span class=\"status good\">✓ Available</span>' : \n" +
                 "                        '<span class=\"status bad\">✗ Not available</span>';\n" +
                 "                    document.getElementById('last-status').textContent = data.lastStatus;\n" +
@@ -917,6 +980,38 @@ public class WebServer extends NanoHTTPD {
                 "            }\n" +
                 "        }\n" +
                 "        \n" +
+                "        function retrySecureSettingsPermission() {\n" +
+                "            const successDiv = document.getElementById('permission-success');\n" +
+                "            const errorDiv = document.getElementById('permission-error');\n" +
+                "            \n" +
+                "            successDiv.style.display = 'none';\n" +
+                "            errorDiv.style.display = 'none';\n" +
+                "            showActivity('Requesting Secure Settings Permission...');\n" +
+                "            \n" +
+                "            fetch('/api/permission', { method: 'POST' })\n" +
+                "            .then(r => r.json())\n" +
+                "            .then(data => {\n" +
+                "                if (data.success) {\n" +
+                "                    successDiv.textContent = data.message;\n" +
+                "                    successDiv.style.display = 'block';\n" +
+                "                    showResult(data.message, true);\n" +
+                "                    setTimeout(() => {\n" +
+                "                        refreshStatus();\n" +
+                "                        refreshLogs();\n" +
+                "                    }, 12000);\n" +
+                "                } else {\n" +
+                "                    errorDiv.textContent = data.error || 'Permission request failed';\n" +
+                "                    errorDiv.style.display = 'block';\n" +
+                "                    showResult(data.error || 'Permission request failed', false);\n" +
+                "                }\n" +
+                "            })\n" +
+                "            .catch(e => {\n" +
+                "                errorDiv.textContent = 'Error: ' + e.message;\n" +
+                "                errorDiv.style.display = 'block';\n" +
+                "                showResult('Error: ' + e.message, false);\n" +
+                "            });\n" +
+                "        }\n" +
+                "        \n" +
                 "        function pairDevice() {\n" +
                 "            const port = document.getElementById('pair-port').value;\n" +
                 "            const code = document.getElementById('pair-code').value;\n" +
@@ -925,7 +1020,7 @@ public class WebServer extends NanoHTTPD {
                 "            \n" +
                 "            successDiv.style.display = 'none';\n" +
                 "            errorDiv.style.display = 'none';\n" +
-                "            showActivity('Pairing device and requesting self-grant permissions...');\n" +
+                "            showActivity('Pairing device and requesting Secure Settings Permission...');\n" +
                 "            \n" +
                 "            fetch('/api/pair', {\n" +
                 "                method: 'POST',\n" +

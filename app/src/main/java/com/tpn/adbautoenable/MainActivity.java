@@ -1,8 +1,11 @@
 package com.tpn.adbautoenable;
 
 import android.app.Activity;
+import android.Manifest;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.widget.LinearLayout;
 import android.widget.Switch;
@@ -12,10 +15,13 @@ public class MainActivity extends Activity {
 
     private static final int WEB_PORT = 9093;
     private static final String PREFS_NAME = "ADBAutoEnablePrefs";
+    private static final int REQUEST_CODE_NOTIFICATIONS = 1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        requestNotificationPermission();
 
         // Read web server preference
         SharedPreferences prefs = NetworkUtils.getDeviceProtectedPrefs(this, PREFS_NAME);
@@ -78,6 +84,17 @@ public class MainActivity extends Activity {
         layout.addView(instructionText);
 
         setContentView(layout);
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    REQUEST_CODE_NOTIFICATIONS
+            );
+        }
     }
 
     private String getLocalIpAddress() {
