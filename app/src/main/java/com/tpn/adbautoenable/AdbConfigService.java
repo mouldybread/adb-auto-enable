@@ -38,6 +38,7 @@ public class AdbConfigService extends Service {
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final int RETRY_DELAY_SECONDS = 10;
     private static final int WEB_SERVER_PORT = 9093;
+    private static final int PERMISSION_RESTRICTION_NOTIFICATION_ID = 2;
 
     private WebServer webServer;
     private volatile boolean isConfiguring = false;
@@ -239,28 +240,49 @@ public class AdbConfigService extends Service {
     }
 
     private void enableWirelessDebuggingImmediately() {
-        try {
-            Log.i(TAG, "Step 0: Immediately enabling wireless debugging & disabling key revocation...");
+        Log.i(TAG, "Step 0: Immediately enabling wireless debugging & disabling key revocation...");
+        if (!hasWriteSecureSettingsPermission()) {
+            Log.w(TAG, "WRITE_SECURE_SETTINGS unavailable; device security policy restricts automatic setup");
+            showPermissionRestrictionNotification();
+            return;
+        }
 
-            // Enable Wireless Debugging
+        clearPermissionRestrictionNotification();
+        if (updateWirelessDebuggingSettings()) {
+            Log.i(TAG, "Wireless debugging and key revocation settings successfully updated early");
+        } else {
+            Log.w(TAG, "Unable to update wireless debugging settings");
+        }
+    }
+
+    private boolean hasWriteSecureSettingsPermission() {
+        return checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS")
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Enables the settings needed for fully automatic operation when the device
+     * permits it. Devices that restrict WRITE_SECURE_SETTINGS can still continue
+     * through discovery when wireless debugging is already available.
+     */
+    private boolean updateWirelessDebuggingSettings() {
+        try {
             Settings.Global.putInt(
                     getContentResolver(),
                     "adb_wifi_enabled",
                     1
             );
-
-            // Disable automatic ADB authorization revocation (0 = never expire)
             Settings.Global.putLong(
                     getContentResolver(),
                     "adb_allowed_connection_time",
                     0L
             );
-
-            Log.i(TAG, "Wireless debugging and key revocation settings successfully updated early");
+            return true;
         } catch (SecurityException e) {
-            Log.e(TAG, "Early settings write failed - permission WRITE_SECURE_SETTINGS missing", e);
+            return false;
         } catch (Exception e) {
-            Log.e(TAG, "Early settings write unexpected error", e);
+            Log.e(TAG, "Unable to update wireless debugging settings", e);
+            return false;
         }
     }
 
@@ -344,17 +366,13 @@ public class AdbConfigService extends Service {
 
     private boolean configureAdb() {
         try {
-            // Re-assert wireless debugging & auto-revocation settings
-            Settings.Global.putInt(
-                    getContentResolver(),
-                    "adb_wifi_enabled",
-                    1
-            );
-            Settings.Global.putLong(
-                    getContentResolver(),
-                    "adb_allowed_connection_time",
-                    0L
-            );
+            // Re-assert wireless debugging & auto-revocation settings when the
+            // device allows it. Otherwise continue with the existing wireless
+            // debugging state, which may be constrained by device security policy.
+            if (!updateWirelessDebuggingSettings()) {
+                Log.w(TAG, "WRITE_SECURE_SETTINGS unavailable; continuing with existing wireless debugging state");
+                updateNotification("Using existing wireless debugging (automatic setup restricted)");
+            }
 
             Log.i(TAG, "Step 2: Waiting for ADB service to start...");
             updateNotification("Waiting for ADB service...");
@@ -618,6 +636,25 @@ public class AdbConfigService extends Service {
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_menu_preferences)
                 .build();
+    }
+
+    private void showPermissionRestrictionNotification() {
+        Notification notification = new Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("ADB Auto-Enable: automatic setup restricted")
+                .setContentText("Secure Settings Permission unavailable; check the device developer-security policy.")
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .build();
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.notify(PERMISSION_RESTRICTION_NOTIFICATION_ID, notification);
+        }
+    }
+
+    private void clearPermissionRestrictionNotification() {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.cancel(PERMISSION_RESTRICTION_NOTIFICATION_ID);
+        }
     }
 
     private void updateNotification(String text) {
