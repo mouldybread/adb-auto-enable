@@ -11,6 +11,8 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
+import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.provider.Settings;
@@ -35,8 +37,8 @@ public class AdbConfigService extends Service {
     private static final String KEY_LAST_PORT = "last_port";
     private static final String KEY_TARGET_PORT = "target_port";
     private static final int INITIAL_BOOT_DELAY_SECONDS = 30;
-    private static final int MAX_RETRY_ATTEMPTS = 3;
-    private static final int RETRY_DELAY_SECONDS = 10;
+    private static final int MAX_RETRY_ATTEMPTS = 8;
+    private static final int RETRY_DELAY_SECONDS = 15;
     private static final int WEB_SERVER_PORT = 9093;
 
     private WebServer webServer;
@@ -356,6 +358,10 @@ public class AdbConfigService extends Service {
                     0L
             );
 
+            // Dual-homed Sony BRAVIA (and similar) need Wi-Fi TLS ADB even when Ethernet is the
+            // ConnectivityManager "active" network. Keep this conservative for other OEMs.
+            prepareWirelessAdbStack();
+
             Log.i(TAG, "Step 2: Waiting for ADB service to start...");
             updateNotification("Waiting for ADB service...");
             Thread.sleep(15000);
@@ -406,8 +412,27 @@ public class AdbConfigService extends Service {
             }
 
             if (success) {
-                Log.i(TAG, "Successfully configured ADB on port " + targetPort + "!");
-                updateStatus("Success - ADB on port " + targetPort);
+                String verifyHost = deviceIP;
+                String wifiIp = NetworkUtils.getIpv4ForInterface("wlan0");
+                if (wifiIp != null) {
+                    verifyHost = wifiIp;
+                }
+                String ethIp = NetworkUtils.getIpv4ForInterface("eth0");
+                if (ethIp == null) {
+                    ethIp = NetworkUtils.getIpv4ForInterface("eth1");
+                }
+                boolean verified = waitForTcpPort(verifyHost, targetPort, 15000)
+                        || (ethIp != null && waitForTcpPort(ethIp, targetPort, 5000))
+                        || waitForTcpPort("127.0.0.1", targetPort, 3000);
+                if (!verified) {
+                    Log.e(TAG, "tcpip command reported success but target port is not reachable yet");
+                    updateStatus("Failed - target port not reachable");
+                    updateNotification("Failed - target port not reachable");
+                    return false;
+                }
+                String successHost = ethIp != null ? ethIp : verifyHost;
+                Log.i(TAG, "Successfully configured ADB on " + successHost + ":" + targetPort + "!");
+                updateStatus("Success - ADB on " + successHost + ":" + targetPort);
                 updateNotification("Success - ADB on port " + targetPort);
                 return true;
             } else {
@@ -437,10 +462,11 @@ public class AdbConfigService extends Service {
 
     @SuppressWarnings("deprecation")
     private int discoverAdbPortViaMdns() {
-        final int[] discoveredPort = {-1};
-        final CountDownLatch latch = new CountDownLatch(1);
-        String deviceIP = getDeviceIP();
-        Log.i(TAG, "Looking for mDNS service on device IP: " + deviceIP);
+        final AtomicInteger discoveredPort = new AtomicInteger(-1);
+        final CountDownLatch discoveryStarted = new CountDownLatch(1);
+        final String activeIP = getDeviceIP();
+        final AdbHelper adbHelper = new AdbHelper(this);
+        Log.i(TAG, "Looking for mDNS service; active IP=" + activeIP);
 
         NsdManager nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
         if (nsdManager == null) {
@@ -452,6 +478,7 @@ public class AdbConfigService extends Service {
             @Override
             public void onDiscoveryStarted(String serviceType) {
                 Log.i(TAG, "mDNS discovery started for " + serviceType);
+                discoveryStarted.countDown();
             }
 
             @Override
@@ -459,33 +486,33 @@ public class AdbConfigService extends Service {
                 Log.i(TAG, "Service found: " + serviceInfo.getServiceName());
                 nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
                     @Override
-                    public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode) {
+                    public void onResolveFailed(NsdServiceInfo info, int errorCode) {
                         Log.e(TAG, "Resolve failed: " + errorCode);
                     }
 
                     @Override
-                    public void onServiceResolved(NsdServiceInfo serviceInfo) {
-                        Log.i(TAG, "Service resolved: " + serviceInfo.getServiceName());
-                        if (serviceInfo.getHost() != null) {
-                            InetAddress hostAddress = serviceInfo.getHost();
-                            String host = hostAddress.getHostAddress();
-                            if (host == null) {
-                                Log.w(TAG, "Host address is null");
-                                return;
-                            }
+                    public void onServiceResolved(NsdServiceInfo info) {
+                        if (info.getHost() == null) {
+                            Log.w(TAG, "Host address is null");
+                            return;
+                        }
+                        String host = info.getHost().getHostAddress();
+                        int port = info.getPort();
+                        Log.i(TAG, "mDNS candidate host=" + host + " port=" + port);
+                        if (host == null || port < 1 || discoveredPort.get() != -1) {
+                            return;
+                        }
 
-                            int port = serviceInfo.getPort();
-                            Log.i(TAG, "Host: " + host + ", Port: " + port);
-                            if (host.startsWith("127.") || host.equals("::1") ||
-                                    host.startsWith("192.168.") || host.startsWith("10.") ||
-                                    host.startsWith("172.") || host.startsWith("100.")) {
-                                if (host.equals(deviceIP)) {
-                                    Log.i(TAG, "Found matching device with IP: " + deviceIP + ", Port: " + port);
-                                    discoveredPort[0] = port;
-                                } else {
-                                    Log.w(TAG, "Skipping device with IP " + host + " (looking for " + deviceIP + ")");
-                                }
+                        // Sony BRAVIA may advertise TLS ADB on Wi-Fi while ConnectivityManager
+                        // reports Ethernet as active. Validate with an ADB handshake.
+                        if (adbHelper.connect("127.0.0.1", port)
+                                || (!activeIP.equals("127.0.0.1") && adbHelper.connect(activeIP, port))
+                                || adbHelper.connect(host, port)) {
+                            if (discoveredPort.compareAndSet(-1, port)) {
+                                Log.i(TAG, "Validated mDNS ADB port " + port + " via handshake");
                             }
+                        } else {
+                            Log.w(TAG, "Skipping unvalidated mDNS candidate " + host + ":" + port);
                         }
                     }
                 });
@@ -504,7 +531,7 @@ public class AdbConfigService extends Service {
             @Override
             public void onStartDiscoveryFailed(String serviceType, int errorCode) {
                 Log.e(TAG, "Discovery start failed: error " + errorCode);
-                latch.countDown();
+                discoveryStarted.countDown();
             }
 
             @Override
@@ -515,73 +542,162 @@ public class AdbConfigService extends Service {
 
         try {
             nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
-
-            boolean found = latch.await(10, TimeUnit.SECONDS);
-            if (!found) {
-                Log.i(TAG, "mDNS discovery window finished, final port: " + discoveredPort[0]);
+            discoveryStarted.await(3, TimeUnit.SECONDS);
+            for (int i = 0; i < 20 && discoveredPort.get() == -1; i++) {
+                Thread.sleep(1000);
             }
-
+        } catch (Exception e) {
+            Log.e(TAG, "mDNS discovery error", e);
+        } finally {
             try {
                 nsdManager.stopServiceDiscovery(discoveryListener);
-                Log.i(TAG, "Discovery stopped, using port: " + discoveredPort[0]);
             } catch (Exception e) {
                 Log.e(TAG, "Error stopping discovery", e);
             }
-
-        } catch (Exception e) {
-            Log.e(TAG, "mDNS discovery error", e);
         }
 
-        return discoveredPort[0];
+        return discoveredPort.get();
     }
 
     private int scanForAdbPort() {
-        Log.i(TAG, "Starting full ephemeral port scan (32768-60999)...");
+        final String activeIP = getDeviceIP();
+        final String wifiIp = NetworkUtils.getIpv4ForInterface("wlan0");
+        java.util.LinkedHashSet<String> hosts = new java.util.LinkedHashSet<>();
+        if (wifiIp != null) hosts.add(wifiIp);
+        if (activeIP != null && !activeIP.equals("127.0.0.1")) hosts.add(activeIP);
+        hosts.add("127.0.0.1");
+        Log.i(TAG, "Starting ephemeral port scan on hosts " + hosts);
+
         SharedPreferences prefs = getPrefs();
         int lastPort = prefs.getInt(KEY_LAST_PORT, -1);
-
-        AdbHelper adbHelper = new AdbHelper(this);
-
-        if (lastPort > 0 && adbHelper.connect("127.0.0.1", lastPort)) {
-            Log.i(TAG, "Found ADB on previously used port: " + lastPort);
-            return lastPort;
+        AdbHelper probe = new AdbHelper(this);
+        if (lastPort > 0) {
+            for (String host : hosts) {
+                if (probe.connect(host, lastPort)) {
+                    Log.i(TAG, "Found ADB on previously used port: " + host + ":" + lastPort);
+                    return lastPort;
+                }
+            }
         }
 
         final int MIN_PORT = 32768;
         final int MAX_PORT = 60999;
-        final int THREAD_COUNT = 64;
-        final int TIMEOUT_MS = 50;
-
+        final int THREAD_COUNT = 96;
+        final int TIMEOUT_MS = 80;
         final AtomicInteger foundPort = new AtomicInteger(-1);
         ExecutorService executor = Executors.newFixedThreadPool(THREAD_COUNT);
 
-        for (int port = MIN_PORT; port <= MAX_PORT; port++) {
-            final int currentPort = port;
-            executor.submit(() -> {
-                if (foundPort.get() != -1) return;
-
-                try (Socket socket = new Socket()) {
-                    socket.connect(new InetSocketAddress("127.0.0.1", currentPort), TIMEOUT_MS);
-
-                    if (adbHelper.connect("127.0.0.1", currentPort)) {
-                        if (foundPort.compareAndSet(-1, currentPort)) {
-                            Log.i(TAG, "Full scan found ADB on port: " + currentPort);
+        for (String host : hosts) {
+            for (int port = MIN_PORT; port <= MAX_PORT; port++) {
+                final int currentPort = port;
+                final String scanHost = host;
+                executor.submit(() -> {
+                    if (foundPort.get() != -1) return;
+                    try (Socket socket = new Socket()) {
+                        socket.connect(new InetSocketAddress(scanHost, currentPort), TIMEOUT_MS);
+                        AdbHelper helper = new AdbHelper(AdbConfigService.this);
+                        if (helper.connect(scanHost, currentPort)
+                                && foundPort.compareAndSet(-1, currentPort)) {
+                            Log.i(TAG, "Full scan found ADB on " + scanHost + ":" + currentPort);
                         }
+                    } catch (Exception ignored) {
                     }
-                } catch (Exception ignored) {
-                }
-            });
+                });
+            }
         }
 
         executor.shutdown();
         try {
-            executor.awaitTermination(15, TimeUnit.SECONDS);
+            executor.awaitTermination(45, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
-            Log.e(TAG, "Port scan interrupted", e);
+            Thread.currentThread().interrupt();
         }
-
+        executor.shutdownNow();
         return foundPort.get();
     }
+
+    private void prepareWirelessAdbStack() {
+        try {
+            Settings.Global.putInt(getContentResolver(), "wifi_always_requested", 1);
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to set wifi_always_requested", e);
+        }
+
+        boolean sonyLike = isSonyLikeDevice()
+                || (NetworkUtils.getIpv4ForInterface("wlan0") != null
+                && (NetworkUtils.getIpv4ForInterface("eth0") != null
+                || NetworkUtils.getIpv4ForInterface("eth1") != null));
+        if (!sonyLike) {
+            return;
+        }
+
+        Log.i(TAG, "Preparing dual-interface wireless ADB stack (Sony/BRAVIA-style)");
+        updateNotification("Preparing Wi-Fi ADB stack...");
+        try {
+            WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wifiManager != null) {
+                // Bounce Wi-Fi while Ethernet remains connected so TLS ADB rebinds on wlan0.
+                wifiManager.setWifiEnabled(false);
+                Thread.sleep(3000);
+                wifiManager.setWifiEnabled(true);
+                waitForWifiIpv4(60000);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Wi-Fi bounce skipped/failed", e);
+        }
+
+        try {
+            Settings.Global.putInt(getContentResolver(), "adb_wifi_enabled", 0);
+            Thread.sleep(2000);
+            Settings.Global.putInt(getContentResolver(), "adb_wifi_enabled", 1);
+            Settings.Global.putLong(getContentResolver(), "adb_allowed_connection_time", 0L);
+            Log.i(TAG, "Toggled adb_wifi_enabled 0 -> 1");
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to toggle adb_wifi_enabled", e);
+        }
+    }
+
+    private boolean isSonyLikeDevice() {
+        String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER;
+        String brand = Build.BRAND == null ? "" : Build.BRAND;
+        String model = Build.MODEL == null ? "" : Build.MODEL;
+        String haystack = (manufacturer + " " + brand + " " + model).toLowerCase();
+        return haystack.contains("sony") || haystack.contains("bravia");
+    }
+
+    private String waitForWifiIpv4(long timeoutMs) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            String ip = NetworkUtils.getIpv4ForInterface("wlan0");
+            if (ip != null) {
+                Log.i(TAG, "Wi-Fi IPv4 ready: " + ip);
+                return ip;
+            }
+            Thread.sleep(1000);
+        }
+        Log.w(TAG, "Timed out waiting for wlan0 IPv4");
+        return null;
+    }
+
+    private boolean waitForTcpPort(String host, int port, long timeoutMs) {
+        if (host == null || host.isEmpty()) return false;
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress(host, port), 500);
+                return true;
+            } catch (Exception ignored) {
+            }
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
 
     private String getDeviceIP() {
         return NetworkUtils.getLiveDeviceIP(this);

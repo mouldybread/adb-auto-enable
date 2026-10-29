@@ -107,6 +107,25 @@ The web server runs on port 9093 in a foreground service. If you can't access it
 7. **Self-Connection & Switch**: Connects to the local ADB daemon (127.0.0.1 loopback -> device LAN IP fallback) and sends the tcpip:<target_port> command.
 8. **Done!**: ADB is available on your target port for external connections!
 
+
+## Sony BRAVIA / dual-interface TVs
+
+On some Sony BRAVIA devices (Android 14), wireless debugging binds to the Wi-Fi
+interface while Ethernet remains the ConnectivityManager "active" network. The
+previous mDNS matcher required an exact IP match against that active address and
+could discard the valid TLS ADB service. Port scanning also only probed
+`127.0.0.1`, which is not always where the daemon accepts connections.
+
+This build:
+
+1. Validates mDNS candidates with a real ADB handshake instead of IP equality.
+2. Scans Wi-Fi / active LAN IPs in addition to loopback.
+3. On Sony/BRAVIA (or dual eth+wlan) devices, prepares the Wi-Fi ADB stack
+   (`wifi_always_requested`, optional Wi-Fi bounce, `adb_wifi_enabled` toggle).
+4. Verifies that the configured TCP port is actually reachable after `tcpip`.
+
+Validated on Sony BRAVIA with Ethernet + saved Wi-Fi profile, target port 5555.
+
 ## Technical Details
 
 ###  Project Structure

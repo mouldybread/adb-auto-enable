@@ -83,6 +83,30 @@ public class NetworkUtils {
             return false;
         }
     }
+
+    /**
+     * Returns the first non-loopback IPv4 address bound to a named interface
+     * (for example {@code wlan0} or {@code eth1}).
+     * Useful on devices that keep Ethernet and Wi-Fi up simultaneously
+     * (observed on Sony BRAVIA Android 14), where the ConnectivityManager
+     * "active" network may not be the interface that advertises TLS ADB.
+     */
+    public static String getIpv4ForInterface(String interfaceName) {
+        if (interfaceName == null || interfaceName.isEmpty()) return null;
+        try {
+            NetworkInterface networkInterface = NetworkInterface.getByName(interfaceName);
+            if (networkInterface == null || !networkInterface.isUp()) return null;
+            for (InetAddress address : Collections.list(networkInterface.getInetAddresses())) {
+                if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
+                    return address.getHostAddress();
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to resolve IPv4 for interface " + interfaceName, e);
+        }
+        return null;
+    }
+
     public static SharedPreferences getDeviceProtectedPrefs(Context context, String prefsName) {
         Context storageContext = context.isDeviceProtectedStorage()
                 ? context
