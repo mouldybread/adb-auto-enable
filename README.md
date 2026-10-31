@@ -83,7 +83,21 @@ Look for:
 - `"Waiting for WiFi connection..."`
 - `"Successfully configured ADB on port 5555!"`
 
+### Port 5555 Unreachable After the Device Sleeps
 
+If `adb connect your-device-ip:5555` works after a reboot but fails after the device has been asleep or in standby for a few hours, the device is most likely powering down its network stack. The app only configures ADB at boot, it does not change the device's power policy.
+
+Wake the device (for example with the remote), then try again:
+
+```bash
+adb connect your-device-ip:5555
+```
+
+If it connects after waking, try these:
+
+1. Disable any battery, energy-saving or background-restriction setting for the system network components and this app (on some Android TV builds this is under **Settings → Apps** or **Settings → Device Preferences → Power/Energy**).
+2. Disable any Wi-Fi power-saving or "turn off Wi-Fi in standby" option if your device has one.
+3. If your device supports it, use wired Ethernet for the connection you use to reach 5555, and keep Wi-Fi connected so wireless debugging can still start at boot.
 
 ### Web Server Not Accessible
 
