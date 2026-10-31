@@ -9,27 +9,16 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.net.nsd.NsdManager;
-import android.net.nsd.NsdServiceInfo;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.provider.Settings;
 import android.util.Log;
 
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class AdbConfigService extends Service {
     private static final String TAG = "ADBAutoEnable";
     private static final String CHANNEL_ID = "ADBAutoEnableChannel";
-    private static final String SERVICE_TYPE = "_adb-tls-connect._tcp";
     private static final String PREFS_NAME = "ADBAutoEnablePrefs";
     private static final String KEY_LAST_STATUS = "last_status";
     private static final String KEY_LAST_PORT = "last_port";
@@ -373,36 +362,40 @@ public class AdbConfigService extends Service {
             updateNotification("Discovering ADB port...");
             updateStatus("Discovering ADB port...");
 
-            int port = discoverAdbPortViaMdns();
-            if (port == -1) {
+            AdbHelper adbHelper = new AdbHelper(this);
+
+            AdbEndpoint endpoint = AdbDiscovery.discover(this);
+            if (endpoint == null) {
                 Log.i(TAG, "mDNS failed, falling back to port scan...");
                 updateNotification("mDNS failed, scanning ports...");
                 updateStatus("mDNS failed, scanning ports...");
-                port = scanForAdbPort();
+                int cachedPort = getPrefs().getInt(KEY_LAST_PORT, -1);
+                endpoint = AdbPortScanner.find(this, cachedPort,
+                        candidate -> adbHelper.connect(candidate.host, candidate.port));
             }
 
-            if (port == -1) {
+            if (endpoint == null) {
                 Log.e(TAG, "Could not find ADB port");
                 updateStatus("Failed - port not found");
                 updateNotification("Failed - port not found");
                 return false;
             }
 
-            Log.i(TAG, "Found ADB on port " + port);
-            saveLastPort(port);
+            Log.i(TAG, "Found ADB at " + endpoint);
+            saveLastPort(endpoint.port);
 
             int targetPort = getTargetPort();
             Log.i(TAG, "Step 4: Switching to port " + targetPort + "...");
             updateNotification("Switching to port " + targetPort + "...");
             updateStatus("Switching to port " + targetPort + "...");
 
-            AdbHelper adbHelper = new AdbHelper(this);
-
-            // Try loopback first (avoids hangs on some devices), fall back to active device IP (Fixes #8)
-            boolean success = adbHelper.switchToPort("127.0.0.1", port, targetPort);
-            if (!success && !deviceIP.equals("127.0.0.1")) {
-                Log.i(TAG, "Switch failed via loopback, falling back to " + deviceIP + "...");
-                success = adbHelper.switchToPort(deviceIP, port, targetPort);
+            // Loopback first (avoids hangs on some devices), then the resolved LAN
+            // host and every local Wi-Fi/Ethernet address (Fixes #8, Fixes #21).
+            boolean success = false;
+            for (String host : NetworkUtils.getAdbCandidateHosts(this, endpoint.host)) {
+                Log.i(TAG, "Switching via " + host + "...");
+                success = adbHelper.switchToPort(host, endpoint.port, targetPort);
+                if (success) break;
             }
 
             if (success) {
@@ -433,154 +426,6 @@ public class AdbConfigService extends Service {
             updateNotification("Failed - error");
             return false;
         }
-    }
-
-    @SuppressWarnings("deprecation")
-    private int discoverAdbPortViaMdns() {
-        final int[] discoveredPort = {-1};
-        final CountDownLatch latch = new CountDownLatch(1);
-        String deviceIP = getDeviceIP();
-        Log.i(TAG, "Looking for mDNS service on device IP: " + deviceIP);
-
-        NsdManager nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
-        if (nsdManager == null) {
-            Log.e(TAG, "NsdManager not available");
-            return -1;
-        }
-
-        NsdManager.DiscoveryListener discoveryListener = new NsdManager.DiscoveryListener() {
-            @Override
-            public void onDiscoveryStarted(String serviceType) {
-                Log.i(TAG, "mDNS discovery started for " + serviceType);
-            }
-
-            @Override
-            public void onServiceFound(NsdServiceInfo serviceInfo) {
-                Log.i(TAG, "Service found: " + serviceInfo.getServiceName());
-                nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
-                    @Override
-                    public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode) {
-                        Log.e(TAG, "Resolve failed: " + errorCode);
-                    }
-
-                    @Override
-                    public void onServiceResolved(NsdServiceInfo serviceInfo) {
-                        Log.i(TAG, "Service resolved: " + serviceInfo.getServiceName());
-                        if (serviceInfo.getHost() != null) {
-                            InetAddress hostAddress = serviceInfo.getHost();
-                            String host = hostAddress.getHostAddress();
-                            if (host == null) {
-                                Log.w(TAG, "Host address is null");
-                                return;
-                            }
-
-                            int port = serviceInfo.getPort();
-                            Log.i(TAG, "Host: " + host + ", Port: " + port);
-                            if (host.startsWith("127.") || host.equals("::1") ||
-                                    host.startsWith("192.168.") || host.startsWith("10.") ||
-                                    host.startsWith("172.") || host.startsWith("100.")) {
-                                if (host.equals(deviceIP)) {
-                                    Log.i(TAG, "Found matching device with IP: " + deviceIP + ", Port: " + port);
-                                    discoveredPort[0] = port;
-                                } else {
-                                    Log.w(TAG, "Skipping device with IP " + host + " (looking for " + deviceIP + ")");
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-
-            @Override
-            public void onServiceLost(NsdServiceInfo serviceInfo) {
-                Log.i(TAG, "Service lost: " + serviceInfo.getServiceName());
-            }
-
-            @Override
-            public void onDiscoveryStopped(String serviceType) {
-                Log.i(TAG, "Discovery stopped: " + serviceType);
-            }
-
-            @Override
-            public void onStartDiscoveryFailed(String serviceType, int errorCode) {
-                Log.e(TAG, "Discovery start failed: error " + errorCode);
-                latch.countDown();
-            }
-
-            @Override
-            public void onStopDiscoveryFailed(String serviceType, int errorCode) {
-                Log.e(TAG, "Discovery stop failed: error " + errorCode);
-            }
-        };
-
-        try {
-            nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
-
-            boolean found = latch.await(10, TimeUnit.SECONDS);
-            if (!found) {
-                Log.i(TAG, "mDNS discovery window finished, final port: " + discoveredPort[0]);
-            }
-
-            try {
-                nsdManager.stopServiceDiscovery(discoveryListener);
-                Log.i(TAG, "Discovery stopped, using port: " + discoveredPort[0]);
-            } catch (Exception e) {
-                Log.e(TAG, "Error stopping discovery", e);
-            }
-
-        } catch (Exception e) {
-            Log.e(TAG, "mDNS discovery error", e);
-        }
-
-        return discoveredPort[0];
-    }
-
-    private int scanForAdbPort() {
-        Log.i(TAG, "Starting full ephemeral port scan (32768-60999)...");
-        SharedPreferences prefs = getPrefs();
-        int lastPort = prefs.getInt(KEY_LAST_PORT, -1);
-
-        AdbHelper adbHelper = new AdbHelper(this);
-
-        if (lastPort > 0 && adbHelper.connect("127.0.0.1", lastPort)) {
-            Log.i(TAG, "Found ADB on previously used port: " + lastPort);
-            return lastPort;
-        }
-
-        final int MIN_PORT = 32768;
-        final int MAX_PORT = 60999;
-        final int THREAD_COUNT = 64;
-        final int TIMEOUT_MS = 50;
-
-        final AtomicInteger foundPort = new AtomicInteger(-1);
-        ExecutorService executor = Executors.newFixedThreadPool(THREAD_COUNT);
-
-        for (int port = MIN_PORT; port <= MAX_PORT; port++) {
-            final int currentPort = port;
-            executor.submit(() -> {
-                if (foundPort.get() != -1) return;
-
-                try (Socket socket = new Socket()) {
-                    socket.connect(new InetSocketAddress("127.0.0.1", currentPort), TIMEOUT_MS);
-
-                    if (adbHelper.connect("127.0.0.1", currentPort)) {
-                        if (foundPort.compareAndSet(-1, currentPort)) {
-                            Log.i(TAG, "Full scan found ADB on port: " + currentPort);
-                        }
-                    }
-                } catch (Exception ignored) {
-                }
-            });
-        }
-
-        executor.shutdown();
-        try {
-            executor.awaitTermination(15, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Log.e(TAG, "Port scan interrupted", e);
-        }
-
-        return foundPort.get();
     }
 
     private String getDeviceIP() {

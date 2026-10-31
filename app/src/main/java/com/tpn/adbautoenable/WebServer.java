@@ -2,28 +2,22 @@ package com.tpn.adbautoenable;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.net.nsd.NsdManager;
-import android.net.nsd.NsdServiceInfo;
 import android.util.Log;
 import fi.iki.elonen.NanoHTTPD;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 public class WebServer extends NanoHTTPD {
     private static final String TAG = "ADBAutoEnable";
     private static final String PREFS_NAME = "ADBAutoEnablePrefs";
     private static final String KEY_TARGET_PORT = "target_port";
-    private static final String SERVICE_TYPE = "_adb-tls-connect._tcp";
 
     private final Context context;
     private final AdbHelper adbHelper;
@@ -136,16 +130,19 @@ public class WebServer extends NanoHTTPD {
                         Thread.sleep(2000);
                         Log.i(TAG, "Attempting to self-grant WRITE_SECURE_SETTINGS permission");
 
-                        int adbPort = discoverAdbPort();
-                        if (adbPort == -1) {
+                        AdbEndpoint endpoint = discoverEndpoint();
+                        if (endpoint == null) {
                             Log.w(TAG, "Could not discover ADB port for self-grant, skipping");
                             return;
                         }
 
-                        String deviceIP = getDeviceIP();
-                        Log.i(TAG, "Found ADB on port " + adbPort + ", attempting self-grant via " + deviceIP);
-                        boolean granted = adbHelper.selfGrantPermission(deviceIP, adbPort,
-                                "com.tpn.adbautoenable", "android.permission.WRITE_SECURE_SETTINGS");
+                        boolean granted = false;
+                        for (String host : NetworkUtils.getAdbCandidateHosts(context, endpoint.host)) {
+                            Log.i(TAG, "Attempting self-grant via " + host + " on " + endpoint);
+                            granted = adbHelper.selfGrantPermission(host, endpoint.port,
+                                    "com.tpn.adbautoenable", "android.permission.WRITE_SECURE_SETTINGS");
+                            if (granted) break;
+                        }
 
                         if (granted) {
                             Log.i(TAG, "Successfully self-granted WRITE_SECURE_SETTINGS permission!");
@@ -158,11 +155,15 @@ public class WebServer extends NanoHTTPD {
                                 context.getPackageName()
                         );
                         if (policy.success) {
-                            boolean autoStartAllowed = adbHelper.ensureTclAutoStart(
-                                    deviceIP,
-                                    adbPort,
-                                    context.getPackageName()
-                            );
+                            boolean autoStartAllowed = false;
+                            for (String host : NetworkUtils.getAdbCandidateHosts(context, endpoint.host)) {
+                                autoStartAllowed = adbHelper.ensureTclAutoStart(
+                                        host,
+                                        endpoint.port,
+                                        context.getPackageName()
+                                );
+                                if (autoStartAllowed) break;
+                            }
                             Log.i(TAG, "TCL AUTO_START configured after pairing: " + autoStartAllowed);
                         }
                     } catch (Exception e) {
@@ -377,23 +378,24 @@ public class WebServer extends NanoHTTPD {
         new Thread(() -> {
             try {
                 Log.i(TAG, "Web API: Discovering ADB port...");
-                int port = discoverAdbPort();
+                AdbEndpoint endpoint = discoverEndpoint();
 
-                if (port == -1) {
+                if (endpoint == null) {
                     Log.e(TAG, "Web API: Could not find ADB port");
                     return;
                 }
 
-                String deviceIP = getDeviceIP();
                 int targetPort = getTargetPort();
 
-                Log.i(TAG, "Web API: Found ADB on port " + port + ", switching to target port " + targetPort + "...");
+                Log.i(TAG, "Web API: Found ADB at " + endpoint + ", switching to target port " + targetPort + "...");
 
-                // Try loopback first, fall back to live device IP (Fixes #8)
-                boolean success = adbHelper.switchToPort("127.0.0.1", port, targetPort);
-                if (!success && !deviceIP.equals("127.0.0.1")) {
-                    Log.i(TAG, "Web API: Switch failed via loopback, retrying via " + deviceIP + "...");
-                    success = adbHelper.switchToPort(deviceIP, port, targetPort);
+                // Loopback first, then the resolved LAN host and local Wi-Fi/Ethernet
+                // addresses (Fixes #8, Fixes #21).
+                boolean success = false;
+                for (String host : NetworkUtils.getAdbCandidateHosts(context, endpoint.host)) {
+                    Log.i(TAG, "Web API: Switching via " + host + "...");
+                    success = adbHelper.switchToPort(host, endpoint.port, targetPort);
+                    if (success) break;
                 }
 
                 if (success) {
@@ -416,100 +418,13 @@ public class WebServer extends NanoHTTPD {
         return getPrefs().getInt(KEY_TARGET_PORT, 5555);
     }
 
-    private int discoverAdbPort() {
-        final int[] discoveredPort = {-1};
-        final CountDownLatch latch = new CountDownLatch(1);
-        String deviceIP = getDeviceIP();
-
-        Log.i(TAG, "Looking for mDNS service on device IP: " + deviceIP);
-
-        NsdManager nsdManager = (NsdManager) context.getSystemService(Context.NSD_SERVICE);
-        if (nsdManager == null) {
-            Log.e(TAG, "NsdManager not available");
-            return -1;
-        }
-
-        NsdManager.DiscoveryListener discoveryListener = new NsdManager.DiscoveryListener() {
-            @Override
-            public void onDiscoveryStarted(String serviceType) {
-                Log.i(TAG, "mDNS discovery started for " + serviceType);
-            }
-
-            @Override
-            @SuppressWarnings("deprecation")
-            public void onServiceFound(NsdServiceInfo serviceInfo) {
-                Log.i(TAG, "Service found: " + serviceInfo.getServiceName());
-                nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
-                    @Override
-                    public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode) {
-                        Log.e(TAG, "Resolve failed: " + errorCode);
-                    }
-
-                    @Override
-                    public void onServiceResolved(NsdServiceInfo serviceInfo) {
-                        if (serviceInfo.getHost() != null) {
-                            InetAddress hostAddress = serviceInfo.getHost();
-                            String host = hostAddress.getHostAddress();
-                            if (host == null) {
-                                Log.w(TAG, "Host address is null");
-                                return;
-                            }
-
-                            int port = serviceInfo.getPort();
-                            Log.i(TAG, "Host: " + host + ", Port: " + port);
-                            if (host.startsWith("127.") || host.equals("::1") ||
-                                    host.startsWith("192.168.") || host.startsWith("10.") ||
-                                    host.startsWith("172.") || host.startsWith("100.")) {
-                                if (host.equals(deviceIP)) {
-                                    Log.i(TAG, "Found matching device with IP: " + deviceIP + ", Port: " + port);
-                                    discoveredPort[0] = port;
-                                } else {
-                                    Log.w(TAG, "Skipping device with IP " + host + " (looking for " + deviceIP + ")");
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-
-            @Override
-            public void onServiceLost(NsdServiceInfo serviceInfo) {
-                Log.i(TAG, "Service lost: " + serviceInfo.getServiceName());
-            }
-
-            @Override
-            public void onDiscoveryStopped(String serviceType) {
-                Log.i(TAG, "Discovery stopped: " + serviceType);
-            }
-
-            @Override
-            public void onStartDiscoveryFailed(String serviceType, int errorCode) {
-                Log.e(TAG, "Discovery start failed: error " + errorCode);
-                latch.countDown();
-            }
-
-            @Override
-            public void onStopDiscoveryFailed(String serviceType, int errorCode) {
-                Log.e(TAG, "Discovery stop failed: error " + errorCode);
-            }
-        };
-
-        try {
-            nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
-            boolean found = latch.await(10, TimeUnit.SECONDS);
-            if (!found) {
-                Log.e(TAG, "mDNS discovery timed out after 10 seconds");
-                try {
-                    nsdManager.stopServiceDiscovery(discoveryListener);
-                } catch (Exception e) {
-                    Log.e(TAG, "Error stopping discovery after timeout", e);
-                }
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "mDNS discovery error", e);
-        }
-
-        return discoveredPort[0];
+    private AdbEndpoint discoverEndpoint() {
+        AdbEndpoint endpoint = AdbDiscovery.discover(context);
+        if (endpoint != null) return endpoint;
+        Log.i(TAG, "mDNS discovery found nothing, falling back to port scan");
+        int cachedPort = getPrefs().getInt("last_port", -1);
+        return AdbPortScanner.find(context, cachedPort,
+                candidate -> adbHelper.connect(candidate.host, candidate.port));
     }
 
     private String getDeviceIP() {
