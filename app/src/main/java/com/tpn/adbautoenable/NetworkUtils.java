@@ -88,6 +88,28 @@ public class NetworkUtils {
         return LocalAdbAddresses.candidates(resolvedHost, getPhysicalAddresses(context));
     }
 
+    /**
+     * First non-loopback IPv4 address on a named interface (for example {@code wlan0}).
+     * Dual-homed devices can keep Ethernet and Wi-Fi up simultaneously, and the
+     * "active" network is not always the interface that advertises TLS ADB.
+     * Adapted from #27 by @Andi316.
+     */
+    public static String getIpv4ForInterface(String interfaceName) {
+        if (interfaceName == null || interfaceName.isEmpty()) return null;
+        try {
+            NetworkInterface networkInterface = NetworkInterface.getByName(interfaceName);
+            if (networkInterface == null || !networkInterface.isUp()) return null;
+            for (InetAddress address : Collections.list(networkInterface.getInetAddresses())) {
+                if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
+                    return address.getHostAddress();
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to resolve IPv4 for interface " + interfaceName, e);
+        }
+        return null;
+    }
+
     /** LAN readiness does not require Internet access or a validated default route. */
     public static boolean isNetworkConnected(Context context) {
         return !getPhysicalAddresses(context).isEmpty();
