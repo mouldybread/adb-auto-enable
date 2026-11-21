@@ -37,6 +37,7 @@ import java.security.spec.X509EncodedKeySpec;
 import java.util.Date;
 import java.util.Locale;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
 
 public class AdbHelper {
     private static final String TAG = "ADBAutoEnable";
@@ -81,14 +82,40 @@ public class AdbHelper {
         }
     }
 
+    /** Temporary authenticated probe. The calling verification worker owns cleanup. */
     public boolean connect(String host, int port) {
-        try (SimpleAdbManager manager = new SimpleAdbManager(context)) {
-            manager.connect(host, port);
-            return true;
+        SimpleAdbManager manager = null;
+        boolean success = false;
+        boolean interrupted = false;
+        boolean cleanupComplete = true;
+        try {
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+            manager = new SimpleAdbManager(context);
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+            manager.setTimeout(4, TimeUnit.SECONDS);
+            success = manager.connect(host, port) && manager.isConnected();
+            Log.i(TAG, "ADB probe authenticated=" + success + "; host=" + host + "; port=" + port);
+        } catch (InterruptedException e) {
+            interrupted = true;
+            Log.i(TAG, "ADB probe interrupted; host=" + host + "; port=" + port);
         } catch (Exception e) {
-            Log.e(TAG, "Connect failed", e);
-            return false;
+            Log.w(TAG, "ADB probe failed; host=" + host + "; port=" + port, e);
+        } finally {
+            // Keep potentially blocking library cleanup on this worker, never the scan controller.
+            interrupted |= Thread.interrupted();
+            if (manager != null) {
+                Log.i(TAG, "ADB probe cleanup starting; host=" + host + "; port=" + port);
+                try { manager.close(); }
+                catch (Exception e) {
+                    cleanupComplete = false;
+                    success = false;
+                    Log.w(TAG, "ADB probe cleanup failed; host=" + host + "; port=" + port, e);
+                }
+                Log.i(TAG, "ADB probe cleanup returned; complete=" + cleanupComplete + "; host=" + host + "; port=" + port);
+            }
+            if (interrupted) Thread.currentThread().interrupt();
         }
+        return success && !Thread.currentThread().isInterrupted();
     }
 
     public boolean ensureTclAutoStart(String host, int port, String packageName) {
@@ -369,8 +396,7 @@ public class AdbHelper {
         private void generateNewKeyPairAndCert() throws Exception {
             Log.i(TAG, "Generating new RSA key pair");
             KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
-            keyGen.initialize(2048, new SecureRandom());
-            KeyPair keyPair = keyGen.generateKeyPair();
+            keyPair = keyGen.generateKeyPair();
             privateKey = keyPair.getPrivate();
             publicKey = keyPair.getPublic();
             Log.i(TAG, "Key pair generated");
