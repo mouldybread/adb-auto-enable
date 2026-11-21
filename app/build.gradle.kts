@@ -50,7 +50,7 @@ android {
 
     defaultConfig {
         applicationId = "com.tpn.adbautoenable"
-        minSdk = 26
+        minSdk = 34
         targetSdk = 35
 
         versionCode = resolvedVersionCode
