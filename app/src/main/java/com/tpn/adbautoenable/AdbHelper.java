@@ -396,7 +396,7 @@ public class AdbHelper {
         private void generateNewKeyPairAndCert() throws Exception {
             Log.i(TAG, "Generating new RSA key pair");
             KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
-            keyPair = keyGen.generateKeyPair();
+            KeyPair keyPair = keyGen.generateKeyPair();
             privateKey = keyPair.getPrivate();
             publicKey = keyPair.getPublic();
             Log.i(TAG, "Key pair generated");
