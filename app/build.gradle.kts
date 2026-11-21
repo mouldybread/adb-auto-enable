@@ -84,6 +84,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
+
+    testOptions {
+        // Worker-thread Log calls are harmless in local JVM tests; NSD/network APIs are explicitly mocked.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
  dependencies {
@@ -95,4 +100,5 @@ android {
     implementation(libs.androidx.annotation)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
+    testImplementation("org.mockito:mockito-core:5.14.2")
 }
