@@ -128,6 +128,8 @@ jobs:
         with:
           files: app/build/outputs/apk/release/ADB-auto-enable-*.apk
           generate_release_notes: true
+          prerelease: ${{ github.ref_name == 'v0.3.7' }}
+          make_latest: ${{ github.ref_name == 'v0.3.7' && 'false' || 'legacy' }}
           overwrite_files: true
           fail_on_unmatched_files: true
         env:
