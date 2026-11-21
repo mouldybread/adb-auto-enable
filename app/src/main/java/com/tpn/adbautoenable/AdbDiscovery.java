@@ -1,164 +1,362 @@
 package com.tpn.adbautoenable;
 
 import android.content.Context;
+import android.net.Network;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.net.wifi.WifiManager;
+import android.os.SystemClock;
 import android.util.Log;
 import java.net.InetAddress;
-import java.util.ArrayDeque;
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.Objects;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
 
-/** Shared local-device discovery. Invoke only from a worker thread. */
-@SuppressWarnings("deprecation")
+/** Android 14+ local-device discovery. Invoke only from a worker thread. */
 final class AdbDiscovery {
     private static final String TAG = "ADBAutoEnable";
     private static final String TYPE = "_adb-tls-connect._tcp";
-    // Prevent boot and web flows from competing for the legacy resolver API.
     private static final Object DISCOVERY_LOCK = new Object();
-
+    private static final Executor DIRECT = Runnable::run;
+    private static final AtomicLong IDS = new AtomicLong();
+    private static final long COLLECTION_MS = 10000;
+    private static final long RESOLUTION_MS = 5000;
+    private static final long TOTAL_MS = 15000;
     private AdbDiscovery() {}
 
     static AdbEndpoint discover(Context context) {
         synchronized (DISCOVERY_LOCK) {
-            if (Thread.currentThread().isInterrupted()) return null;
-            AdbPortDiagnostic.logTlsPort();
-            if (Thread.currentThread().isInterrupted()) return null;
-            NsdManager manager = (NsdManager) context.getSystemService(Context.NSD_SERVICE);
-            if (manager == null) return null;
+            Session session = new Session(context);
             WifiManager.MulticastLock multicast = null;
-            Session session = new Session(context, manager);
             boolean requested = false;
             try {
-                WifiManager wifi = (WifiManager) context.getApplicationContext()
-                        .getSystemService(Context.WIFI_SERVICE);
+                session.log("starting; type=" + TYPE + "; collectionMs=" + COLLECTION_MS
+                        + "; initialResolutionMs=" + RESOLUTION_MS + "; totalMs=" + TOTAL_MS);
+                if (Thread.currentThread().isInterrupted()) { session.exit = "interrupted"; return null; }
+                AdbPortDiagnostic.logTlsPort();
+                if (Thread.currentThread().isInterrupted()) { session.exit = "interrupted"; return null; }
+                session.manager = (NsdManager) context.getSystemService(Context.NSD_SERVICE);
+                if (session.manager == null) { session.exit = "nsd_unavailable"; return null; }
+                WifiManager wifi = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                 if (wifi != null) {
                     try {
                         multicast = wifi.createMulticastLock("adb-auto-enable-discovery");
                         multicast.setReferenceCounted(false);
                         multicast.acquire();
-                    } catch (RuntimeException e) {
-                        Log.w(TAG, "Could not acquire multicast lock; continuing NSD discovery", e);
-                    }
-                }
-                Log.i(TAG, "Discovering local ADB; LAN addresses: " + NetworkUtils.getPhysicalAddresses(context));
-                manager.discoverServices(TYPE, NsdManager.PROTOCOL_DNS_SD, session);
+                        session.log("multicast lock acquired");
+                    } catch (RuntimeException e) { session.warn("multicast lock unavailable; continuing", e); }
+                } else { session.log("Wi-Fi manager unavailable; continuing without multicast lock"); }
+                session.log("local physical addresses=" + NetworkUtils.getPhysicalAddresses(context));
+                session.log("discovery requested");
+                session.manager.discoverServices(TYPE, NsdManager.PROTOCOL_DNS_SD, session);
                 requested = true;
-                // Intentional: collect updates for the whole window, not just the first match.
-                session.failed.await(10, TimeUnit.SECONDS);
+                session.await();
             } catch (InterruptedException e) {
+                session.exit = "interrupted";
                 Thread.currentThread().interrupt();
+                session.log("worker interrupted; cancelling discovery");
             } catch (RuntimeException e) {
-                Log.w(TAG, "mDNS discovery failed", e);
+                session.exit = "discovery_exception";
+                session.warn("discovery exception", e);
             } finally {
-                session.finish();
-                if (requested) {
-                    try { manager.stopServiceDiscovery(session); }
-                    catch (RuntimeException e) { Log.w(TAG, "Could not stop mDNS discovery", e); }
+                try {
+                    session.finish();
+                    if (requested) {
+                        try {
+                            session.log("discovery stop requested");
+                            session.manager.stopServiceDiscovery(session);
+                        } catch (RuntimeException e) { session.warn("discovery stop request failed", e); }
+                    }
+                } finally {
+                    try {
+                        if (multicast != null && multicast.isHeld()) {
+                            multicast.release();
+                            session.log("multicast lock released");
+                        }
+                    } catch (RuntimeException e) { session.warn("multicast lock release failed", e); }
+                    finally { session.summary(); }
                 }
-                if (multicast != null && multicast.isHeld()) multicast.release();
             }
             if (Thread.currentThread().isInterrupted()) return null;
-            AdbEndpoint result = session.result();
-            Log.i(TAG, "mDNS collection finished: " + (result == null ? "no local endpoint" : result));
-            return result;
+            return session.result();
         }
     }
 
+    private static String safe(String text) {
+        if (text == null) return "null";
+        String value = text.replace('\n', ' ').replace('\r', ' ');
+        return value.length() > 240 ? value.substring(0, 240) + "..." : value;
+    }
+
+    private static final class Key {
+        final String name;
+        final String type;
+        final Network network;
+        Key(NsdServiceInfo info) {
+            name = info.getServiceName();
+            String raw = info.getServiceType();
+            type = raw == null ? null : raw.replaceAll("[.]+$", "");
+            network = info.getNetwork();
+        }
+        @Override public boolean equals(Object other) {
+            if (!(other instanceof Key)) return false;
+            Key key = (Key) other;
+            return Objects.equals(name, key.name) && Objects.equals(type, key.type)
+                    && Objects.equals(network, key.network);
+        }
+        @Override public int hashCode() { return Objects.hash(name, type, network); }
+        @Override public String toString() { return safe(name) + "/" + safe(type) + " network=" + network; }
+    }
+
     private static final class Session implements NsdManager.DiscoveryListener {
-        final CountDownLatch failed = new CountDownLatch(1);
-        private final Context context;
-        private final NsdManager manager;
-        private final ArrayDeque<NsdServiceInfo> queue = new ArrayDeque<>();
-        private final Map<String, Long> generations = new HashMap<>();
-        private long generation;
-        private boolean resolving;
-        private boolean active = true;
-        private AdbEndpoint endpoint;
-        private String endpointName;
+        final Context context;
+        final long id = IDS.incrementAndGet();
+        final long started = SystemClock.elapsedRealtime();
+        final Map<Key, Watch> watches = new LinkedHashMap<>();
+        final List<Watch> registrations = new ArrayList<>();
+        NsdManager manager;
+        boolean active = true;
+        boolean failed;
+        boolean collectionClosed;
+        boolean summarized;
+        String exit = "collection_complete";
+        int found, duplicates, lost, requests, updates, accepted, rejected, failures, timeouts, ignored;
+        int stopRequests, stopConfirmed, stopFailures;
+        Session(Context context) { this.context = context; }
+        String prefix() { return "mDNS #" + id + " +" + (SystemClock.elapsedRealtime() - started) + "ms: "; }
+        void log(String message) { Log.i(TAG, prefix() + message); }
+        void warn(String message, Throwable error) { Log.w(TAG, prefix() + message, error); }
 
-        Session(Context context, NsdManager manager) {
-            this.context = context;
-            this.manager = manager;
+        int pending() {
+            int count = 0;
+            for (Watch watch : watches.values()) if (!watch.completed) count++;
+            return count;
+        }
+        synchronized void await() throws InterruptedException {
+            while (!failed) {
+                long now = SystemClock.elapsedRealtime();
+                if (now - started >= TOTAL_MS) {
+                    exit = "overall_deadline";
+                    log("overall deadline reached; pending=" + pending());
+                    for (Watch watch : new ArrayList<>(watches.values()))
+                        if (!watch.completed) watch.timeout("overall_deadline");
+                    break;
+                }
+                if (!collectionClosed && now - started >= COLLECTION_MS) {
+                    collectionClosed = true;
+                    log("collection window closed; draining existing resolutions; pending=" + pending());
+                }
+                for (Watch watch : new ArrayList<>(watches.values()))
+                    if (!watch.completed && now >= watch.deadline) watch.timeout("initial_resolution_deadline");
+                if (collectionClosed && pending() == 0) break;
+                wait(Math.min(100, TOTAL_MS - (now - started)));
+            }
+        }
+        synchronized void finish() {
+            active = false;
+            log("session ending; pending=" + pending() + "; registrations=" + registrations.size());
+            for (Watch watch : registrations) {
+                watch.acceptUpdates = false;
+                watch.stop("session_end");
+            }
+        }
+        synchronized AdbEndpoint result() {
+            AdbEndpoint result = null;
+            for (Watch watch : watches.values()) if (watch.endpoint != null) result = watch.endpoint;
+            return result;
+        }
+        synchronized void summary() {
+            if (summarized) return;
+            summarized = true;
+            AdbEndpoint endpoint = result();
+            String outcome;
+            if ("interrupted".equals(exit)) outcome = "cancelled_interrupted";
+            else if (failed || "discovery_exception".equals(exit) || "nsd_unavailable".equals(exit)) outcome = "discovery_failed";
+            else if (endpoint != null) outcome = "local_endpoint_found";
+            else if (found == 0) outcome = "no_services_discovered";
+            else if (timeouts > 0 || failures > 0) outcome = "resolution_failed_or_timed_out";
+            else if (rejected > 0 && accepted == 0) outcome = "resolved_services_rejected";
+            else outcome = "no_current_local_endpoint";
+            log("SUMMARY outcome=" + outcome + "; exit=" + exit + "; endpoint=" + endpoint
+                    + "; foundEvents=" + found + "; duplicates=" + duplicates + "; lostEvents=" + lost
+                    + "; resolutionRequests=" + requests + "; updates=" + updates
+                    + "; acceptedUpdates=" + accepted + "; rejectedUpdates=" + rejected
+                    + "; failures=" + failures + "; timeouts=" + timeouts + "; ignored=" + ignored
+                    + "; pending=" + pending() + "; unregisterRequested=" + stopRequests
+                    + "; unregisterConfirmed=" + stopConfirmed + "; unregisterFailed=" + stopFailures
+                    + "; cleanup confirmations may arrive after this snapshot");
+        }
+        @Override public synchronized void onServiceFound(NsdServiceInfo info) {
+            Key key = new Key(info);
+            if (!active || failed || SystemClock.elapsedRealtime() - started >= COLLECTION_MS) {
+                ignored++;
+                log("service-found ignored; reason=" + (!active ? "session_ended" : failed ? "discovery_failed" : "collection_closed") + "; " + key);
+                return;
+            }
+            found++;
+            log("service found: " + key);
+            if (watches.containsKey(key)) {
+                duplicates++;
+                log("duplicate merged; retaining existing registration/deadline: " + key);
+                return;
+            }
+            Watch watch = new Watch(key, registrations.size() + 1);
+            watches.put(key, watch);
+            registrations.add(watch);
+            watch.registered = true;
+            requests++;
+            log("resolution requested: " + watch.label() + "; pending=" + pending() + "; queue=none (independent callbacks)");
+            try { manager.registerServiceInfoCallback(info, DIRECT, watch); }
+            catch (RuntimeException e) {
+                watch.registered = false;
+                watch.completed = true;
+                watch.acceptUpdates = false;
+                failures++;
+                warn("resolution registration threw: " + watch.label(), e);
+            }
+            notifyAll();
+        }
+        @Override public synchronized void onServiceLost(NsdServiceInfo info) {
+            Key key = new Key(info);
+            if (!active) { ignored++; log("service-lost ignored; reason=session_ended; " + key); return; }
+            lost++;
+            Watch watch = watches.remove(key);
+            log("service lost: " + key + "; matched=" + (watch != null)
+                    + "; invalidatedEndpoint=" + (watch == null ? null : watch.endpoint));
+            if (watch != null) {
+                watch.acceptUpdates = false;
+                watch.endpoint = null;
+                watch.completed = true;
+                watch.stop("service_lost");
+            }
+            notifyAll();
+        }
+        @Override public void onDiscoveryStarted(String type) { log("discovery started; type=" + safe(type)); }
+        @Override public void onDiscoveryStopped(String type) { log("discovery stop confirmed; type=" + safe(type)); }
+        @Override public synchronized void onStartDiscoveryFailed(String type, int error) {
+            failed = true;
+            exit = "discovery_start_failed";
+            log("discovery start failed; code=" + error + "; type=" + safe(type));
+            notifyAll();
+        }
+        @Override public void onStopDiscoveryFailed(String type, int error) {
+            log("discovery stop failed; code=" + error + "; type=" + safe(type));
         }
 
-        synchronized void finish() { active = false; queue.clear(); }
-        synchronized AdbEndpoint result() { return endpoint; }
-
-        @Override public void onDiscoveryStarted(String type) {
-            Log.i(TAG, "mDNS discovery started: " + type);
-        }
-
-        @Override public synchronized void onServiceFound(NsdServiceInfo service) {
-            if (!active) return;
-            generations.put(service.getServiceName(), ++generation);
-            queue.add(service);
-            resolveNext();
-        }
-
-        private synchronized void resolveNext() {
-            if (!active || resolving || queue.isEmpty()) return;
-            NsdServiceInfo service = queue.remove();
-            String name = service.getServiceName();
-            Long token = generations.get(name);
-            if (token == null) { resolveNext(); return; }
-            resolving = true;
-            try {
-                manager.resolveService(service, new NsdManager.ResolveListener() {
-                    @Override public void onResolveFailed(NsdServiceInfo info, int error) {
-                        synchronized (Session.this) {
-                            Log.w(TAG, "mDNS resolve failed: " + name + " code=" + error);
-                            resolving = false;
-                            resolveNext();
-                        }
+        private final class Watch implements NsdManager.ServiceInfoCallback {
+            final Key key;
+            final int number;
+            final long requestedAt = SystemClock.elapsedRealtime();
+            final long deadline = Math.min(started + TOTAL_MS, requestedAt + RESOLUTION_MS);
+            boolean registered;
+            boolean stopRequested;
+            boolean completed;
+            boolean acceptUpdates = true;
+            AdbEndpoint endpoint;
+            Watch(Key key, int number) { this.key = key; this.number = number; }
+            String label() { return "registration=" + number + "; " + key; }
+            boolean current(String event) {
+                String reason = !active ? "session_ended" : watches.get(key) != this ? "stale_registration"
+                        : !acceptUpdates ? "registration_retired" : null;
+                if (reason == null) return true;
+                ignored++;
+                log(event + " ignored; reason=" + reason + "; " + label());
+                return false;
+            }
+            void timeout(String reason) {
+                completed = true;
+                acceptUpdates = false;
+                timeouts++;
+                log("resolution timed out; reason=" + reason + "; elapsedMs="
+                        + (SystemClock.elapsedRealtime() - requestedAt) + "; " + label());
+                stop("resolution_timeout");
+            }
+            void stop(String reason) {
+                if (!registered || stopRequested) return;
+                stopRequested = true;
+                stopRequests++;
+                log("callback unregister requested; reason=" + reason + "; " + label());
+                try { manager.unregisterServiceInfoCallback(this); }
+                catch (RuntimeException e) {
+                    stopRequested = false;
+                    stopFailures++;
+                    warn("callback unregister request failed: " + label(), e);
+                }
+            }
+            @Override public void onServiceUpdated(NsdServiceInfo info) {
+                synchronized (Session.this) {
+                    if (!current("service update")) return;
+                    if (SystemClock.elapsedRealtime() >= deadline && !completed) {
+                        timeout("late_initial_update");
+                        Session.this.notifyAll();
+                        return;
                     }
-                    @Override public void onServiceResolved(NsdServiceInfo info) {
-                        synchronized (Session.this) {
-                            try {
-                                if (!active || !token.equals(generations.get(name))) return;
-                                InetAddress address = info.getHost();
-                                String host = address == null ? null : address.getHostAddress();
-                                int port = info.getPort();
-                                if (host != null && port > 0 && port <= 65535
-                                        && NetworkUtils.isLocalPhysicalAddress(context, host)) {
-                                    endpoint = new AdbEndpoint(host, port);
-                                    endpointName = name;
-                                    Log.i(TAG, "Accepted local ADB service " + name + " at " + endpoint);
-                                } else {
-                                    Log.i(TAG, "Ignored non-LAN/invalid ADB service " + name + " at " + host + ":" + port);
-                                }
-                            } finally {
-                                resolving = false;
-                                resolveNext();
+                    completed = true;
+                    updates++;
+                    endpoint = null;
+                    int port = info.getPort();
+                    List<InetAddress> addresses = info.getHostAddresses();
+                    log("resolution update: " + label() + "; returnedNetwork=" + info.getNetwork()
+                            + "; port=" + port + "; addresses=" + addresses
+                            + "; elapsedMs=" + (SystemClock.elapsedRealtime() - requestedAt));
+                    if (port <= 0 || port > 65535) {
+                        log("update rejected; reason=invalid_port; " + label());
+                    } else if (addresses.isEmpty()) {
+                        log("update rejected; reason=no_host_addresses; " + label());
+                    } else {
+                        List<String> locals = NetworkUtils.getPhysicalAddresses(context);
+                        for (InetAddress address : addresses) {
+                            String host = address.getHostAddress();
+                            if (host == null) {
+                                log("address rejected; reason=missing_numeric_address; " + label());
+                            } else if (!LocalAdbAddresses.matches(host, locals)) {
+                                log("address rejected; reason=not_local_physical_address; host=" + safe(host)
+                                        + "; locals=" + locals + "; " + label());
+                            } else if (endpoint == null) {
+                                endpoint = new AdbEndpoint(host, port);
+                                log("local endpoint accepted: " + endpoint + "; " + label());
+                            } else {
+                                log("additional local address available: " + safe(host) + "; " + label());
                             }
                         }
                     }
-                });
-            } catch (RuntimeException e) {
-                Log.w(TAG, "Could not request mDNS resolution for " + name, e);
-                resolving = false;
-                resolveNext();
+                    if (endpoint == null) rejected++; else accepted++;
+                    Session.this.notifyAll();
+                }
             }
-        }
-
-        @Override public synchronized void onServiceLost(NsdServiceInfo service) {
-            if (!active) return;
-            String name = service.getServiceName();
-            generations.remove(name);
-            if (name.equals(endpointName)) { endpoint = null; endpointName = null; }
-        }
-        @Override public void onDiscoveryStopped(String type) {
-            Log.i(TAG, "mDNS discovery stopped: " + type);
-        }
-        @Override public void onStartDiscoveryFailed(String type, int error) {
-            Log.w(TAG, "mDNS discovery start failed: " + error);
-            failed.countDown();
-        }
-        @Override public void onStopDiscoveryFailed(String type, int error) {
-            Log.w(TAG, "mDNS discovery stop failed: " + error);
+            @Override public void onServiceLost() {
+                synchronized (Session.this) {
+                    if (!current("tracked service-lost")) return;
+                    log("tracked service unavailable; invalidatedEndpoint=" + endpoint + "; " + label());
+                    endpoint = null;
+                    Session.this.notifyAll();
+                }
+            }
+            @Override public void onServiceInfoCallbackRegistrationFailed(int error) {
+                synchronized (Session.this) {
+                    registered = false;
+                    completed = true;
+                    acceptUpdates = false;
+                    endpoint = null;
+                    failures++;
+                    log("callback registration failed; code=" + error + "; afterSessionEnd=" + !active + "; " + label());
+                    Session.this.notifyAll();
+                }
+            }
+            @Override public void onServiceInfoCallbackUnregistered() {
+                synchronized (Session.this) {
+                    registered = false;
+                    completed = true;
+                    acceptUpdates = false;
+                    stopConfirmed++;
+                    log("callback unregister confirmed; afterSummary=" + summarized + "; " + label());
+                    Session.this.notifyAll();
+                }
+            }
         }
     }
 }
